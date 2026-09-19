@@ -54,7 +54,7 @@ defaults:
 
 env:
   GENERAL_CONFIG_FILE: configs/General.config
-  DIY_SCRIPT: scripts/Roc-script.sh
+  DIY_SCRIPT: scripts/ZN-M2-script.sh
   OPENWRT_PATH: /mnt/openwrt
   TZ: Asia/Shanghai
 
@@ -171,7 +171,7 @@ jobs:
       id: variables
       env:
         ARTIFACT_PREFIX: ${{ inputs.artifact_prefix }}
-        CUSTOMIZATION_HASH: ${{ hashFiles('scripts/Roc-script.sh', 'configs/General.config', inputs.config_file) }}
+        CUSTOMIZATION_HASH: ${{ hashFiles('scripts/ZN-M2-script.sh', 'configs/General.config', inputs.config_file) }}
         REPO_URL: ${{ inputs.repo_url }}
         REPO_BRANCH: ${{ inputs.repo_branch }}
         CONFIG_FILE: ${{ inputs.config_file }}

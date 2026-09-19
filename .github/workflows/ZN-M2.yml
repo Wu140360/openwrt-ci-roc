@@ -1,0 +1,36 @@
+name: ZN-M2
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  # schedule:
+  #   - cron: "0 18 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  Build:
+    uses: ./.github/workflows/Build-OpenWrt.yml
+    permissions:
+      contents: write
+      actions: write
+    with:
+      repo_url: https://github.com/laipeng668/openwrt-6.x.git
+      repo_branch: 25.12-nss
+      config_file: configs/ZN-M2.config
+      firmware_tag: ZN-M2
+      kernel_file: kernel-6.12
+      artifact_prefix: ZN-M2
+      manifest_file: libwrt-qualcommax-ipq60xx.manifest
+      # 无 WiFi / 无 USB / 满血 NSS；产物名去掉 qualcommax 后缀
+      rename_qualcommax_to_nowifi: true
+      package_extension: apk
+      release_summary: >-
+        兆能 ZN-M2 (IPQ6000, 1GB RAM) 专用固件：开启全功能满血 NSS（q6_region 保持默认 85MB），
+        完全不带 WiFi、不带 USB；默认主题为 Aurora；基于 OpenWrt 25.12 + apk 包管理；
+        集成 LuCI 简体中文（含插件 i18n）、turboacc、NSS-QoS (sqm-scripts-nss + cake)、
+        SmartDNS（内置解决 GitHub DNS 污染）、DDNS、WireGuard、KMS(vlmcsd)、TTYD(含常用工具)、
+        cpufreq、autoreboot、watchcat、upnp、wol、acme、nlbwmon、lldp、igmp-proxy 等；
+        主机名 openwrt，默认地址 192.168.2.1。
