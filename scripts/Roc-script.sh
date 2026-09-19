@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+### 兆能M2 专用自定义脚本 ###
+### 基于 openwrt-ci-roc Roc-script.sh 修改, 适配 zn_m2 无WiFi/无USB 场景 ###
+
 set -Eeuo pipefail
 
 WORKSPACE="${GITHUB_WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
@@ -31,7 +34,6 @@ CONFIG_FILES=()
 if [ -n "$DEVICE_CONFIG_FILE" ]; then
   CONFIG_FILES+=("$(resolve_config_file "$DEVICE_CONFIG_FILE")")
 elif [ -f .config ]; then
-  # Keep direct invocations compatible with an existing OpenWrt .config.
   CONFIG_FILES+=("$PWD/.config")
 else
   echo "Error: pass the device config as the first argument or CONFIG_FILE" >&2
@@ -132,9 +134,21 @@ clone_repository() {
 mkdir -p "$(dirname "$THIRD_PARTY_SOURCES_FILE")"
 printf 'Repository\tBranch\tCommit\n' > "$THIRD_PARTY_SOURCES_FILE"
 
-# 修改默认IP & 固件名称 & 编译署名和时间
+# ===== 修改默认IP & 主机名 & 固件署名 =====
+echo "==> 设置默认 IP 为 192.168.2.1, 主机名为 openwrt"
 sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
-sed -i "s/hostname='.*'/hostname='Roc'/g" package/base-files/files/bin/config_generate
+sed -i "s/hostname='.*'/hostname='openwrt'/g" package/base-files/files/bin/config_generate
+
+# 设置主机名映射
+cat > package/base-files/files/etc/hosts <<'EOF'
+127.0.0.1 localhost
+::1     localhost ip6-localhost ip6-loopback
+ff02::1 ip6-allnodes
+ff02::2 ip6-allrouters
+127.0.0.1 openwrt
+EOF
+
+# LuCI 固件版本显示
 luci_system_js="feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js"
 firmware_version_anchor="_('Firmware Version'), (L.isObject(boardinfo.release) ? boardinfo.release.description + ' / ' : '') + (luciversion || ''),"
 grep -Fq "$firmware_version_anchor" "$luci_system_js" || { echo "Error: LuCI firmware version anchor was not found in $luci_system_js" >&2; exit 1; }
@@ -143,24 +157,506 @@ sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.r
             E('span', {}, [\n \
                 (L.isObject(boardinfo.release)\n \
                 ? boardinfo.release.description + ' / '\n \
-                : '') + (luciversion || '') + ' / ',\n \
+                : '') + (luciversion || '') + ' /',\n \
             E('a', {\n \
-                href: 'https://github.com/laipeng668/openwrt-ci-roc/releases',\n \
+                href: 'https://github.com/Wu140360/openwrt-ci-roc/releases',\n \
                 target: '_blank',\n \
                 rel: 'noopener noreferrer'\n \
-                }, [ 'Built by Roc $(date "+%Y-%m-%d %H:%M:%S")' ])\n \
+                }, [ 'Built by ZNM2 $(date "+%Y-%m-%d %H:%M:%S")' ])\n \
             ]),#" "$luci_system_js"
 
-# 调整NSS驱动q6_region内存区域预留大小（ipq6018.dtsi默认预留85MB，ipq6018-512m.dtsi默认预留55MB，带WiFi必须至少预留54MB，以下分别是改成预留16MB、32MB、64MB和96MB）
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x01000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x02000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x04000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x06000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
+# ===== 默认设置: 设备名 openwrt, 默认密码为空 (首次登录后设置) =====
+# 修改 /etc/config/system 默认值
+mkdir -p package/base-files/files/etc/config
+cat > package/base-files/files/etc/config/system <<'EOF'
+config system
+    option hostname 'openwrt'
+    option timezone 'Asia/Shanghai'
+    option zonename 'Asia/Shanghai'
+EOF
 
-# 调节IPQ60XX的1.5GHz频率电压(从0.9375V提高到0.95V，过低可能导致不稳定，过高可能增加功耗和发热，具体数值需要根据实际情况调整)
-# sed -i 's/opp-microvolt = <937500>;/opp-microvolt = <950000>;/' target/linux/qualcommax/patches-6.12/0038-v6.16-arm64-dts-qcom-ipq6018-add-1.5GHz-CPU-Frequency.patch
+# ===== 禁用 WiFi 相关 (确保即使有驱动也不启用) =====
+mkdir -p package/base-files/files/etc/config
+cat > package/base-files/files/etc/config/wireless.disabled <<'EOF'
+# WiFi disabled - this device (zn_m2) runs without wireless
+# File intentionally empty to prevent wifi setup
+EOF
 
-# Git稀疏克隆，只克隆指定目录到本地
+# 创建 /etc/rc.local 禁用WiFi (防御性)
+cat >> package/base-files/files/etc/rc.local <<'EOF'
+# ZN-M2: Disable WiFi (no wireless hardware used)
+# rm -rf /etc/config/wireless 2>/dev/null
+# /etc/init.d/wpad disable 2>/dev/null
+# /etc/init.d/hostapd disable 2>/dev/null
+# true
+EOF
+
+# ===== 修改默认 LAN IP =====
+cat > package/base-files/files/etc/config/network <<'EOF'
+config interface 'loopback'
+    option device 'lo'
+    option proto 'static'
+    option ipaddr '127.0.0.1'
+    option netmask '255.0.0.0'
+
+config globals 'globals'
+    option ula_prefix 'fd00:ab:cd::/48'
+
+config interface 'lan'
+    option device 'br-lan'
+    option proto 'static'
+    option ipaddr '192.168.2.1'
+    option netmask '255.255.255.0'
+    option ip6assign '60'
+EOF
+
+# ===== SmartDNS 预设配置 (解决GitHub DNS污染) =====
+mkdir -p package/base-files/files/etc/config
+cat > package/base-files/files/etc/config/smartdns <<'EOF'
+config smartdns 'main'
+    option enabled '1'
+    option server_name 'openwrt'
+    option port '53'
+    option auto_set_dnsmasq '1'
+    option dnsmasq_config '/etc/dnsmasq.conf'
+    option redirect 'dnsmasq-upstream'
+    option cache_size '512'
+    option cache_dir '/tmp/smartdns'
+    option prefetch_domain '1'
+    option serve_expired '1'
+    option serve_expired_ttl '259200'
+    option serve_expired_reply_ttl '30'
+    option dualstack_ip_selection '1'
+    option force_aaaa_soa '0'
+    option coredump '0'
+    option bogus_nxdomain_ipv4 '220.181.57.217'
+    option bogus_nxdomain_ipv4 '123.125.81.12'
+    option log_level 'warn'
+    option log_size '100K'
+    option log_file '/tmp/smartdns.log'
+    option tcp_server '0'
+    option bind_tcp '0'
+    option bind_device 'br-lan'
+
+config server 'default'
+    option address '223.5.5.5'
+    option type 'udp'
+    option port '53'
+    option blacklist_ip '1'
+
+config server 'default'
+    option address '119.29.29.29'
+    option type 'udp'
+    option port '53'
+    option blacklist_ip '1'
+
+config server 'default'
+    option address 'https://doh.pub/dns-query'
+    option type 'https'
+    option server_group 'domestic'
+
+config server 'default'
+    option address 'tls://223.5.5.5:853'
+    option type 'tls'
+    option server_group 'domestic'
+
+config server 'default'
+    option address 'https://dns.alidns.com/dns-query'
+    option type 'https'
+    option server_group 'domestic'
+
+config server 'default'
+    option address 'https://dns.google/dns-query'
+    option type 'https'
+    option server_group 'international'
+
+config server 'default'
+    option address 'tls://8.8.8.8:853'
+    option type 'tls'
+    option server_group 'international'
+
+config server 'default'
+    option address 'https://cloudflare-dns.com/dns-query'
+    option type 'https'
+    option server_group 'international'
+
+### GitHub DNS 防污染规则 - 关键设置 ###
+config domain-rule 'github'
+    option domain 'github.com'
+    option server_group 'international'
+    option no_speed_check '1'
+
+config domain-rule 'github-raw'
+    option domain 'raw.githubusercontent.com'
+    option server_group 'international'
+    option no_speed_check '1'
+
+config domain-rule 'github-assets'
+    option domain 'objects.githubusercontent.com'
+    option server_group 'international'
+    option no_speed_check '1'
+
+config domain-rule 'github-avatars'
+    option domain 'avatars.githubusercontent.com'
+    option server_group 'international'
+    option no_speed_check '1'
+
+config domain-rule 'github-api'
+    option domain 'api.github.com'
+    option server_group 'international'
+    option no_speed_check '1'
+
+config domain-rule 'github-user'
+    option domain 'user-images.githubusercontent.com'
+    option server_group 'international'
+    option no_speed_check '1'
+
+config domain-rule 'github-camo'
+    option domain 'camo.githubusercontent.com'
+    option server_group 'international'
+    option no_speed_check '1'
+
+config domain-rule 'github-cloud'
+    option domain 'github-cloud.s3.amazonaws.com'
+    option server_group 'international'
+    option no_speed_check '1'
+
+config domain-rule 'google'
+    option domain 'google.com'
+    option server_group 'international'
+
+config domain-rule 'youtube'
+    option domain 'youtube.com'
+    option server_group 'international'
+
+config domain-rule 'telegram'
+    option domain 'telegram.org'
+    option server_group 'international'
+
+### 国内域名加速 ###
+config domain-rule 'cn'
+    option domain 'cn'
+    option server_group 'domestic'
+
+config domain-rule 'baidu'
+    option domain 'baidu.com'
+    option server_group 'domestic'
+
+config domain-rule 'qq'
+    option domain 'qq.com'
+    option server_group 'domestic'
+
+config domain-rule 'taobao'
+    option domain 'taobao.com'
+    option server_group 'domestic'
+
+config domain-rule 'aliyun'
+    option domain 'aliyun.com'
+    option server_group 'domestic'
+
+### 强制使用TCP查询的域名 (防UDP污染) ###
+config force-qtype-SOA 'default'
+    option qtype '1'
+    option is_ipv4 '1'
+    list domain 'github.com'
+    list domain 'raw.githubusercontent.com'
+    list domain 'objects.githubusercontent.com'
+EOF
+
+# ===== qosify NSS 硬件QoS 预设配置 =====
+cat > package/base-files/files/etc/config/qosify <<'EOF'
+config qosify 'settings'
+    option enabled '0'
+    option download '1000mbit'
+    option upload '1000mbit'
+    option script 'simple.qosify'
+    option interface 'wan'
+    option ingress 'wan'
+    option egress 'wan'
+    option options '-6'
+    option debug '0'
+    option autorate_ingress '1'
+    option autorate_egress '1'
+
+config interface 'wan'
+    option name 'wan'
+    option disabled '0'
+    option bandwidth_up '100mbit'
+    option bandwidth_down '1000mbit'
+    option overhead_type 'ether-vlan'
+    option options 'diffserv4'
+    option autorate '1'
+    option ingress '1'
+    option egress '1'
+
+config class 'Default'
+    option ingress 'CS0'
+    option egress 'CS0'
+    option priority '3'
+    option fallback '1'
+
+config class 'Priority'
+    option ingress 'CS5'
+    option egress 'CS5'
+    option priority '1'
+
+config class 'Normal'
+    option ingress 'CS3'
+    option egress 'CS3'
+    option priority '2'
+
+config class 'Bulk'
+    option ingress 'CS1'
+    option egress 'CS1'
+    option priority '4'
+
+config rule 'SSH'
+    option klass 'Priority'
+    option dport '22'
+    option proto 'tcp'
+
+config rule 'DNS'
+    option klass 'Priority'
+    option dport '53'
+    option proto 'udp'
+
+config rule 'Gaming'
+    option klass 'Priority'
+    option dport '3074,27015-27200'
+    option proto 'udp'
+
+config rule 'Web'
+    option klass 'Normal'
+    option dport '80,443'
+    option proto 'tcp'
+
+config rule 'Download'
+    option klass 'Bulk'
+    option dport '6881-6999,51413'
+    option proto 'tcp'
+EOF
+
+# 启用 NSS 队列规则 (qca-nss-qdisc)
+mkdir -p package/base-files/files/etc/modules.d
+cat > package/base-files/files/etc/modules.d/99-nss-qdisc <<'EOF'
+qca-nss-qdisc
+EOF
+
+# ===== TTYD 终端配置 (集成常用工具别名) =====
+mkdir -p package/base-files/files/etc/profile.d
+cat > package/base-files/files/etc/profile.d/ttyd-tools.sh <<'EOF'
+#!/bin/sh
+### TTYD 终端常用工具别名与函数 ###
+
+alias ll='ls -la'
+alias la='ls -A'
+alias l='ls -CF'
+alias df='df -h'
+alias free='free -h'
+alias top='htop'
+alias gs='git status'
+alias gp='git pull'
+alias gc='git clone'
+alias ports='netstat -tulpen'
+alias conns='ss -tnp'
+alias myip='curl -s ifconfig.me'
+alias myipv6='curl -s6 ifconfig.me'
+alias ns='nslookup'
+alias digg='dig +short'
+alias speed='speedtest-cli 2>/dev/null || echo "speedtest-cli not installed"'
+alias temp='cat /sys/class/thermal/thermal_zone*/temp'
+alias cpu='cat /proc/cpuinfo | grep "model name" | head -1'
+alias meminfo='cat /proc/meminfo | head -10'
+alias ifstat='ifstat -t 1'
+alias routes='ip route show'
+alias arp='ip neigh show'
+alias fw='iptables -L -n -v'
+alias fw6='ip6tables -L -n -v'
+alias nss='lsmod | grep nss'
+alias zram='cat /proc/swaps'
+
+### 网络诊断函数 ###
+diag() {
+    echo "=== 系统信息 ==="
+    uname -a
+    echo ""
+    echo "=== CPU 温度 ==="
+    for i in /sys/class/thermal/thermal_zone*/temp; do
+        echo "$i: $(cat $i 2>/dev/null | awk '{print $1/1000"°C"}')"
+    done
+    echo ""
+    echo "=== 内存使用 ==="
+    free -h
+    echo ""
+    echo "=== 磁盘使用 ==="
+    df -h
+    echo ""
+    echo "=== 网络接口 ==="
+    ip -br addr show
+    echo ""
+    echo "=== NSS 模块状态 ==="
+    lsmod | grep -i nss || echo "NSS modules not loaded"
+    echo ""
+    echo "=== DNS 测试 ==="
+    nslookup github.com 2>/dev/null || echo "DNS not configured"
+}
+
+dns_test() {
+    echo "=== DNS 解析测试 ==="
+    for domain in github.com raw.githubusercontent.com google.com baidu.com; do
+        echo -n "$domain -> "
+        nslookup "$domain" 127.0.0.1 2>/dev/null | grep "Address" | tail -1
+    done
+}
+
+watch_conn() {
+    watch -n 1 'ss -tnp | head -30'
+}
+
+clear_cache() {
+    echo 3 > /proc/sys/vm/drop_caches
+    echo "Cache cleared"
+}
+EOF
+chmod +x package/base-files/files/etc/profile.d/ttyd-tools.sh
+
+# ===== CPU 频率调节预设 (性能模式, 高负载稳定) =====
+cat > package/base-files/files/etc/config/cpufreq <<'EOF'
+config 'cpufreq' 'settings'
+    option 'enabled' '1'
+    option 'governor' 'schedutil'
+    option 'min_freq' '0'
+    option 'max_freq' '0'
+    option 'up_threshold' '50'
+    option 'down_threshold' '20'
+EOF
+
+# ===== UPnP 预设 =====
+cat > package/base-files/files/etc/config/upnpd <<'EOF'
+config upnpd 'config'
+    option enabled '1'
+    option enable_natpmp '1'
+    option enable_upnp '1'
+    option secure_mode '1'
+    option log_output '0'
+    option download '1024'
+    option upload '512'
+    option internal_iface 'lan'
+    option external_iface 'wan'
+    option port '5000'
+    option upnp_lease_file '/var/run/miniupnpd.leases'
+
+config perm_rule 'AllowHighPorts'
+    option action 'allow'
+    option ext_ports '1024-65535'
+    option int_addr '0.0.0.0/0'
+    option int_ports '1024-65535'
+    option comments 'Allow high ports'
+EOF
+
+# ===== DDNS 预设 (Cloudflare 示例, 用户需自行填写) =====
+cat > package/base-files/files/etc/config/ddns <<'EOF'
+config ddns 'global'
+    option ddns_dateformat '%F %R'
+    option ddns_rundir '/var/run/ddns'
+
+config service 'myddns_ipv4'
+    option enabled '0'
+    option interface 'wan'
+    option service_name 'cloudflare.com-v4'
+    option lookup_host ''
+    option domain ''
+    option username 'Bearer'
+    option password ''
+    option use_ipv6 '0'
+    option use_syslog '2'
+    option check_interval '10'
+    option check_unit 'min'
+    option update_interval '1'
+    option update_unit 'day'
+    option retry_interval '60'
+    option retry_unit 'sec'
+
+config service 'myddns_ipv6'
+    option enabled '0'
+    option interface 'wan'
+    option service_name 'cloudflare.com-v6'
+    option lookup_host ''
+    option domain ''
+    option username 'Bearer'
+    option password ''
+    option use_ipv6 '1'
+    option use_syslog '2'
+    option check_interval '10'
+    option check_unit 'min'
+    option update_interval '1'
+    option update_unit 'day'
+    option retry_interval '60'
+    option retry_unit 'sec'
+EOF
+
+# ===== KMS 预设 (默认启用) =====
+cat > package/base-files/files/etc/config/vlmcsd <<'EOF'
+config vlmcsd 'config'
+    option enabled '1'
+    option port '1688'
+    option iface 'lan'
+    option lan_interface 'br-lan'
+    option ip_address '192.168.2.1'
+    option DisableGenID '0'
+    option DisabledIPRouting '0'
+EOF
+
+# ===== WireGuard 预设 (用户需自行配置接口和peer) =====
+cat > package/base-files/files/etc/config/wireguard <<'EOF'
+# WireGuard 默认禁用, 用户通过 LuCI 或命令行配置
+# 示例配置 (取消注释后使用):
+# config interface 'wg0'
+#     option proto 'wireguard'
+#     option private_key ''
+#     option listen_port '51820'
+#     list addresses '10.0.0.1/24'
+#
+# config wireguard_wg0 'peer_name'
+#     option public_key ''
+#     option allowed_ips '10.0.0.2/32'
+#     option endpoint_host ''
+#     option endpoint_port '51820'
+#     option persistent_keepalive '25'
+EOF
+
+# ===== 内核参数优化 (网络性能) =====
+cat > package/base-files/files/etc/sysctl.conf <<'EOF'
+# ZN-M2 网络性能优化
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.core.netdev_max_backlog = 5000
+net.core.somaxconn = 4096
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_timestamps = 1
+net.ipv4.tcp_sack = 1
+net.ipv4.tcp_window_scaling = 1
+net.ipv4.tcp_keepalive_time = 120
+net.ipv4.tcp_keepalive_intvl = 30
+net.ipv4.tcp_keepalive_probes = 3
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+net.netfilter.nf_conntrack_max = 65536
+net.netfilter.nf_conntrack_tcp_timeout_established = 3600
+net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30
+
+# 内存优化 (1GB)
+vm.swappiness = 10
+vm.vfs_cache_pressure = 50
+vm.dirty_ratio = 10
+vm.dirty_background_ratio = 5
+EOF
+
+# ===== Git稀疏克隆 (仅克隆需要的包) =====
 git_sparse_clone() {
   local branch="$1"
   local repourl="$2"
@@ -190,90 +686,7 @@ git_sparse_clone() {
   rm -rf "$repodir"
 }
 
-# Aria2 & nginx & Go & DDNS & frp & UPnP & Wol
-rm -rf feeds/packages/lang/golang
-git_sparse_clone master https://github.com/laipeng668/packages lang/golang
-mv package/golang feeds/packages/lang/golang
-
-if package_enabled luci-app-aria2 aria2; then
-  rm -rf feeds/packages/net/aria2
-  git_sparse_clone aria2 https://github.com/laipeng668/packages net/aria2
-  mv package/aria2 feeds/packages/net/aria2
-fi
-if package_enabled ariang; then
-  rm -rf feeds/packages/net/ariang
-  git_sparse_clone ariang https://github.com/laipeng668/packages net/ariang
-  mv package/ariang feeds/packages/net/ariang
-fi
-
-if package_enabled nginx nginx-full nginx-ssl luci-app-nginx; then
-  rm -rf feeds/packages/net/nginx
-  git_sparse_clone nginx https://github.com/laipeng668/packages net/nginx
-  mv package/nginx feeds/packages/net/nginx
-fi
-
-if package_enabled luci-app-ddns ddns-scripts ddns-scripts-cloudflare; then
-  rm -rf feeds/packages/net/ddns-scripts
-  git_sparse_clone master https://github.com/laipeng668/packages net/ddns-scripts
-  mv package/ddns-scripts feeds/packages/net/ddns-scripts
-fi
-if package_enabled luci-app-ddns; then
-  rm -rf feeds/luci/applications/luci-app-ddns
-  git_sparse_clone master https://github.com/laipeng668/luci applications/luci-app-ddns
-  mv package/luci-app-ddns feeds/luci/applications/luci-app-ddns
-fi
-
-if package_enabled frp frpc frps luci-app-frpc luci-app-frps; then
-  rm -rf \
-    feeds/packages/net/frp
-  git_sparse_clone frp-binary https://github.com/laipeng668/packages net/frp
-  mv package/frp feeds/packages/net/frp
-fi
-
-frp_luci_paths=()
-if package_enabled luci-app-frpc; then
-  rm -rf feeds/luci/applications/luci-app-frpc
-  frp_luci_paths+=(applications/luci-app-frpc)
-fi
-if package_enabled luci-app-frps; then
-  rm -rf feeds/luci/applications/luci-app-frps
-  frp_luci_paths+=(applications/luci-app-frps)
-fi
-if [ "${#frp_luci_paths[@]}" -gt 0 ]; then
-  git_sparse_clone frp https://github.com/laipeng668/luci "${frp_luci_paths[@]}"
-  for frp_luci_path in "${frp_luci_paths[@]}"; do
-    mv "package/$(basename "$frp_luci_path")" "feeds/luci/$frp_luci_path"
-    sed -i '/^LUCI_EXTRA_DEPENDS:=/d' "feeds/luci/$frp_luci_path/Makefile"
-  done
-fi
-
-if package_enabled luci-app-upnp miniupnpd; then
-  rm -rf feeds/packages/net/miniupnpd
-  git_sparse_clone master https://github.com/immortalwrt/packages net/miniupnpd
-  mv package/miniupnpd feeds/packages/net/miniupnpd
-fi
-if package_enabled luci-app-upnp; then
-  rm -rf feeds/luci/applications/luci-app-upnp
-  git_sparse_clone master https://github.com/immortalwrt/luci applications/luci-app-upnp
-  mv package/luci-app-upnp feeds/luci/applications/luci-app-upnp
-fi
-
-if package_enabled luci-app-wol; then
-  rm -rf feeds/luci/applications/luci-app-wol
-  git_sparse_clone master https://github.com/immortalwrt/luci applications/luci-app-wol
-  mv package/luci-app-wol feeds/luci/applications/luci-app-wol
-fi
-
-# Themes and standalone applications. A config application pulls in its theme as a dependency.
-if package_enabled luci-theme-argon luci-app-argon-config; then
-  rm -rf feeds/luci/themes/luci-theme-argon
-  clone_repository https://github.com/jerrykuku/luci-theme-argon master feeds/luci/themes/luci-theme-argon
-fi
-if package_enabled luci-app-argon-config; then
-  rm -rf feeds/luci/applications/luci-app-argon-config
-  clone_repository https://github.com/jerrykuku/luci-app-argon-config master feeds/luci/applications/luci-app-argon-config
-fi
-
+### Aurora 主题 (唯一主题) ###
 if package_enabled luci-theme-aurora luci-app-aurora-config; then
   rm -rf feeds/luci/themes/luci-theme-aurora
   clone_repository https://github.com/eamonxg/luci-theme-aurora master feeds/luci/themes/luci-theme-aurora
@@ -283,58 +696,84 @@ if package_enabled luci-app-aurora-config; then
   clone_repository https://github.com/eamonxg/luci-app-aurora-config master feeds/luci/applications/luci-app-aurora-config
 fi
 
-if package_enabled luci-app-openlist2 openlist2; then
-  clone_repository https://github.com/laipeng668/luci-app-openlist2 main package/openlist2
+### qosify (NSS硬件QoS) ###
+if package_enabled qosify luci-app-qosify; then
+  rm -rf feeds/packages/net/qosify
+  git_sparse_clone master https://github.com/openwrt/packages net/qosify
+  mv package/qosify feeds/packages/net/qosify
 fi
 
-if package_enabled luci-app-lucky lucky; then
-  clone_repository https://github.com/gdy666/luci-app-lucky main package/luci-app-lucky
+### SmartDNS ###
+if package_enabled luci-app-smartdns smartdns; then
+  rm -rf feeds/packages/net/smartdns
+  git_sparse_clone master https://github.com/openwrt/packages net/smartdns
+  mv package/smartdns feeds/packages/net/smartdns
 fi
 
-if package_enabled luci-app-wechatpush; then
-  rm -rf feeds/luci/applications/luci-app-wechatpush
-  clone_repository https://github.com/tty228/luci-app-wechatpush master package/luci-app-wechatpush
+### DDNS (Cloudflare支持) ###
+if package_enabled luci-app-ddns ddns-scripts ddns-scripts-cloudflare; then
+  rm -rf feeds/packages/net/ddns-scripts
+  git_sparse_clone master https://github.com/openwrt/packages net/ddns-scripts
+  mv package/ddns-scripts feeds/packages/net/ddns-scripts
+fi
+if package_enabled luci-app-ddns; then
+  rm -rf feeds/luci/applications/luci-app-ddns
+  git_sparse_clone master https://github.com/openwrt/luci applications/luci-app-ddns
+  mv package/luci-app-ddns feeds/luci/applications/luci-app-ddns
 fi
 
-if package_enabled luci-app-oaf open-app-filter; then
-  rm -rf feeds/luci/applications/luci-app-appfilter feeds/packages/net/open-app-filter
-  clone_repository https://github.com/destan19/OpenAppFilter.git master package/OpenAppFilter
+### TTYD ###
+if package_enabled luci-app-ttyd ttyd; then
+  rm -rf feeds/luci/applications/luci-app-ttyd
+  git_sparse_clone master https://github.com/openwrt/luci applications/luci-app-ttyd
+  mv package/luci-app-ttyd feeds/luci/applications/luci-app-ttyd
 fi
 
-if package_enabled luci-app-gecoosac gecoosac; then
-  clone_repository https://github.com/laipeng668/luci-app-gecoosac main package/luci-app-gecoosac
+### UPnP ###
+if package_enabled luci-app-upnp miniupnpd; then
+  rm -rf feeds/packages/net/miniupnpd
+  git_sparse_clone master https://github.com/openwrt/packages net/miniupnpd
+  mv package/miniupnpd feeds/packages/net/miniupnpd
+fi
+if package_enabled luci-app-upnp; then
+  rm -rf feeds/luci/applications/luci-app-upnp
+  git_sparse_clone master https://github.com/openwrt/luci applications/luci-app-upnp
+  mv package/luci-app-upnp feeds/luci/applications/luci-app-upnp
 fi
 
-if package_enabled luci-app-athena-led luci-i18n-athena-led-zh-cn; then
-  clone_repository https://github.com/NONGFAH/luci-app-athena-led main package/luci-app-athena-led
-  chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
+### vlmcsd (KMS) ###
+if package_enabled luci-app-vlmcsd vlmcsd; then
+  rm -rf feeds/packages/net/vlmcsd
+  git_sparse_clone master https://github.com/openwrt/packages net/vlmcsd
+  mv package/vlmcsd feeds/packages/net/vlmcsd
+fi
+if package_enabled luci-app-vlmcsd; then
+  rm -rf feeds/luci/applications/luci-app-vlmcsd
+  git_sparse_clone master https://github.com/openwrt/luci applications/luci-app-vlmcsd
+  mv package/luci-app-vlmcsd feeds/luci/applications/luci-app-vlmcsd
 fi
 
-### PassWall & OpenClash ###
-
-if package_enabled luci-app-passwall luci-app-passwall2; then
-  # 移除 OpenWrt Feeds 自带的核心库
-  rm -rf feeds/packages/net/{xray-core,v2ray-geodata,sing-box,chinadns-ng,dns2socks,hysteria,ipt2socks,microsocks,naiveproxy,shadowsocks-libev,shadowsocks-rust,shadowsocksr-libev,simple-obfs,tcping,trojan-plus,tuic-client,v2ray-plugin,xray-plugin,geoview,shadow-tls}
-  clone_repository https://github.com/Openwrt-Passwall/openwrt-passwall-packages main package/passwall-packages
+### TurboACC ###
+if package_enabled luci-app-turboacc; then
+  rm -rf feeds/luci/applications/luci-app-turboacc
+  git_sparse_clone master https://github.com/openwrt/luci applications/luci-app-turboacc
+  mv package/luci-app-turboacc feeds/luci/applications/luci-app-turboacc
 fi
 
-if package_enabled luci-app-passwall; then
-  rm -rf feeds/luci/applications/luci-app-passwall
-  clone_repository https://github.com/Openwrt-Passwall/openwrt-passwall main package/luci-app-passwall
+### cpufreq ###
+if package_enabled luci-app-cpufreq; then
+  rm -rf feeds/luci/applications/luci-app-cpufreq
+  git_sparse_clone master https://github.com/openwrt/luci applications/luci-app-cpufreq
+  mv package/luci-app-cpufreq feeds/luci/applications/luci-app-cpufreq
 fi
 
-if package_enabled luci-app-passwall2; then
-  rm -rf feeds/luci/applications/luci-app-passwall2
-  clone_repository https://github.com/Openwrt-Passwall/openwrt-passwall2 main package/luci-app-passwall2
+### WireGuard (通常已在kernel中, 确保LuCI app) ###
+if package_enabled luci-app-wireguard; then
+  rm -rf feeds/luci/applications/luci-app-wireguard
+  git_sparse_clone master https://github.com/openwrt/luci applications/luci-app-wireguard
+  mv package/luci-app-wireguard feeds/luci/applications/luci-app-wireguard
 fi
 
-if package_enabled luci-app-openclash; then
-  rm -rf feeds/luci/applications/luci-app-openclash
-  clone_repository https://github.com/vernesong/OpenClash master package/luci-app-openclash
-fi
-
-# 清理 PassWall 的 chnlist 规则文件
-# echo "baidu.com"  > package/luci-app-passwall/luci-app-passwall/root/usr/share/passwall/rules/chnlist
-
+### 清理不需要的 feeds (减少编译时间和固件体积) ###
 ./scripts/feeds update -i -a
 ./scripts/feeds install -a
