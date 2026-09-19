@@ -1,0 +1,6 @@
+*.config.old
+*.orig
+*.rej
+*.swp
+*~
+.DS_Store
