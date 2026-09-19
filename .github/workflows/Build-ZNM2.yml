@@ -1,0 +1,42 @@
+name: Build-ZNM2
+on:
+  workflow_dispatch:
+    inputs:
+      repo_branch:
+        description: 'LibWrt源码分支'
+        required: false
+        default: '25.12-nss'
+        type: string
+      release_summary:
+        description: 'Release说明'
+        required: false
+        default: '兆能M2 (zn_m2) 精简固件 - 无WiFi/无USB, 满血NSS, Aurora主题'
+        type: string
+  # push:
+  #   branches: [main]
+  # schedule:
+  #   - cron: "0 18 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  Build:
+    uses: ./.github/workflows/Build-OpenWrt.yml
+    permissions:
+      contents: write
+      actions: write
+    with:
+      repo_url: https://github.com/laipeng668/LibWrt.git
+      repo_branch: ${{ inputs.repo_branch || '25.12-nss' }}
+      config_file: configs/ZNM2.config
+      firmware_tag: ZNM2
+      kernel_file: kernel-6.12
+      artifact_prefix: ZNM2
+      manifest_file: libwrt-qualcommax-ipq60xx.manifest
+      release_summary: ${{ inputs.release_summary || '兆能M2 (zn_m2) 精简固件 - 无WiFi/无USB, 满血NSS, Aurora主题, SmartDNS, qosify NSS QoS, WireGuard, KMS' }}
+      remove_sqm_scripts_nss: false
+      rename_qualcommax_to_nowifi: true
+      delete_old_workflows: false
+      package_extension: apk

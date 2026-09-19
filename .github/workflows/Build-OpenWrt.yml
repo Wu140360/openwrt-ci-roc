@@ -1,5 +1,4 @@
 name: Build-OpenWrt
-
 on:
   workflow_call:
     inputs:
@@ -54,7 +53,7 @@ defaults:
 
 env:
   GENERAL_CONFIG_FILE: configs/General.config
-  DIY_SCRIPT: scripts/Roc-script.sh
+  DIY_SCRIPT: scripts/ZNM2-script.sh
   OPENWRT_PATH: /mnt/openwrt
   TZ: Asia/Shanghai
 
@@ -105,11 +104,11 @@ jobs:
       run: |
         sudo -E apt-get -y update
         sudo -E apt-get -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
-          bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
-          git gperf haveged help2man intltool jq libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
-          libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libfuse-dev libssl-dev libtool lrzsz \
-          genisoimage msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip libpython3-dev qemu-utils \
-          rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+        bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib \
+        git gperf haveged help2man intltool jq libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev \
+        libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libreadline-dev libfuse-dev libssl-dev libtool lrzsz \
+        genisoimage msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip libpython3-dev qemu-utils \
+        rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
         sudo -E systemctl daemon-reload
         sudo timedatectl set-timezone "$TZ"
 
@@ -156,22 +155,24 @@ jobs:
       run: |
         cd "$OPENWRT_PATH"
         mirror_file="scripts/projectsmirrors.json"
-        jq '
+        if [ -f "$mirror_file" ]; then
+          jq '
           with_entries(
-            .value |= map(select(
-              test("^https?://(mirrors\\.tencent\\.com|mirrors\\.aliyun\\.com|mirrors\\.tuna\\.tsinghua\\.edu\\.cn|mirrors\\.ustc\\.edu\\.cn|mirror\\.iscas\\.ac\\.cn|mirror\\.nju\\.edu\\.cn)(/|$)")
-              | not
-            ))
+          .value |= map(select(
+          test("^https?://(mirrors\\.tencent\\.com|mirrors\\.aliyun\\.com|mirrors\\.tuna\\.tsinghua\\.edu\\.cn|mirrors\\.ustc\\.edu\\.cn|mirror\\.iscas\\.ac\\.cn|mirror\\.nju\\.edu\\.cn)(/|$)")
+          | not
+          ))
           )
-        ' "$mirror_file" > "$mirror_file.tmp"
-        mv "$mirror_file.tmp" "$mirror_file"
-        sed -i '/raw\.gitmirror\.com/d' scripts/download.pl
+          ' "$mirror_file" > "$mirror_file.tmp"
+          mv "$mirror_file.tmp" "$mirror_file"
+        fi
+        sed -i '/raw\.gitmirror\.com/d' scripts/download.pl 2>/dev/null || true
 
     - name: Generate Variables(生成变量)
       id: variables
       env:
         ARTIFACT_PREFIX: ${{ inputs.artifact_prefix }}
-        CUSTOMIZATION_HASH: ${{ hashFiles('scripts/Roc-script.sh', 'configs/General.config', inputs.config_file) }}
+        CUSTOMIZATION_HASH: ${{ hashFiles('scripts/ZNM2-script.sh', 'configs/General.config', inputs.config_file) }}
         REPO_URL: ${{ inputs.repo_url }}
         REPO_BRANCH: ${{ inputs.repo_branch }}
         CONFIG_FILE: ${{ inputs.config_file }}
@@ -247,8 +248,8 @@ jobs:
         chmod +x "$GITHUB_WORKSPACE/$DIY_SCRIPT"
         cd "$OPENWRT_PATH"
         "$GITHUB_WORKSPACE/$DIY_SCRIPT" \
-          "$GITHUB_WORKSPACE/$CONFIG_FILE" \
-          "$GITHUB_WORKSPACE/$GENERAL_CONFIG_FILE"
+        "$GITHUB_WORKSPACE/$CONFIG_FILE" \
+        "$GITHUB_WORKSPACE/$GENERAL_CONFIG_FILE"
 
     - name: Download DL Package(下载DL软件包)
       env:
@@ -261,7 +262,6 @@ jobs:
         fi
         make defconfig
         if [ -d staging_dir ]; then
-          # Refresh component stamps before aggregate stamps so restored host tools and toolchains remain valid.
           tools_stamp="$(find staging_dir/host -maxdepth 2 -type f -name '.tools_compile*' -print -quit 2>/dev/null || true)"
           if [ -n "$tools_stamp" ]; then
             find staging_dir/host/stamp -maxdepth 1 -type f ! -name '.tools_compile*' -exec touch {} + 2>/dev/null || true
@@ -363,7 +363,6 @@ jobs:
     concurrency:
       group: openwrt-release-${{ github.repository }}-${{ inputs.artifact_prefix }}
       cancel-in-progress: false
-
     steps:
     - name: Download Firmware Artifact(下载固件产物)
       uses: actions/download-artifact@v4
@@ -385,26 +384,34 @@ jobs:
           **This is OpenWrt Firmware for ${{ inputs.firmware_tag }}**
           ### 📒 固件信息
           - ${{ inputs.release_summary }}
-          - 💻 这是 ${{ inputs.firmware_tag }} 平台使用的 OpenWrt 固件
-          - ⚽ 固件源码: ${{ inputs.repo_url }}
-          - 💝 源码分支: ${{ inputs.repo_branch }}
+          - 💻 这是 ${{ inputs.firmware_tag }} (兆能M2, IPQ60XX) 平台使用的 OpenWrt 固件
           - 🌐 默认地址: **192.168.2.1**
           - 🔑 默认密码: none
+          - 🎨 主题: Aurora
+          - 🌍 语言: 简体中文
+          - 📦 包管理器: APK (25.12)
+          ### ✨ 主要特性
+          - **满血NSS** (q6_region保持默认, 不缩减)
+          - **无WiFi / 无USB** (纯有线路由, 降低发热)
+          - **NSS QoS** (qosify + nss.qdisc 硬件加速QoS)
+          - **SmartDNS** (内置配置, 解决GitHub DNS污染)
+          - **WireGuard** VPN
+          - **KMS** (vlmcsd)
+          - **TTYD终端** (集成常用网络工具)
+          - **DDNS** (Cloudflare)
           ### 🧊 固件版本
           - 固件内核版本：**${{ needs.Build.outputs.version_kernel }}**
-          - 固件编译前最后一次➦[主源码](${{ inputs.repo_url }})更新记录
           - ${{ needs.Build.outputs.version_info }}
 
   Cleanup:
     runs-on: ubuntu-24.04
     needs:
-      - Build
-      - Release
+    - Build
+    - Release
     if: ${{ !cancelled() && needs.Build.result == 'success' && needs.Release.result == 'success' }}
     permissions:
       contents: read
       actions: write
-
     steps:
     - name: Delete Old Cache(删除旧缓存)
       env:
@@ -420,7 +427,6 @@ jobs:
           local current_created_at
           local key_prefix="${current_key%-*}"
           key_prefix="${key_prefix%-*}-"
-
           cache_list_file="$(mktemp "$RUNNER_TEMP/openwrt-cache-list.XXXXXX.json")"
           gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$key_prefix" --limit 10000 --sort created_at --order desc --json id,key,createdAt > "$cache_list_file"
           current_created_at="$(jq -r --arg key "$current_key" '[.[] | select(.key == $key) | .createdAt] | first // empty' "$cache_list_file")"
@@ -429,16 +435,14 @@ jobs:
             rm -f "$cache_list_file"
             return 0
           fi
-
           jq -r --arg key "$current_key" --arg created_at "$current_created_at" \
-            '.[] | select(.key != $key and .createdAt < $created_at) | [.id, .key] | @tsv' "$cache_list_file" |
-            while IFS=$'\t' read -r cache_id cache_key; do
-              [ -n "$cache_id" ] || continue
-              gh cache delete --repo "$GITHUB_REPOSITORY" "$cache_id" || echo "::warning::Unable to delete cache $cache_key ($cache_id)."
-            done
+          '.[] | select(.key != $key and .createdAt < $created_at) | [.id, .key] | @tsv' "$cache_list_file" |
+          while IFS=$'\t' read -r cache_id cache_key; do
+            [ -n "$cache_id" ] || continue
+            gh cache delete --repo "$GITHUB_REPOSITORY" "$cache_id" || echo "::warning::Unable to delete cache $cache_key ($cache_id)."
+          done
           rm -f "$cache_list_file"
         }
-
         delete_old_cache_versions "$CCACHE_KEY"
         delete_old_cache_versions "$STAGING_KEY"
 
