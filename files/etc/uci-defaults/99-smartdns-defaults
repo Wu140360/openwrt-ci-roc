@@ -1,0 +1,83 @@
+#!/bin/sh
+# ============================================================
+#  SmartDNS 内置默认配置（首次开机执行一次）
+#  ------------------------------------------------------------
+#  目标：解决 github.com 等域名的 DNS 污染问题，
+#        同时保证国内域名高速解析。
+#
+#  工作模式：
+#    - dnsmasq 作为主 DNS（监听 0.0.0.0:53），将上游指向 smartdns
+#    - smartdns 监听 127.0.0.1:5353，负责递归 + 缓存 + 分流
+#    - 国内域名组走国内上游，国外（含 github）走可信上游
+# ============================================================
+set -e
+
+SMARTDNS_CONF="/etc/smartdns/smartdns.conf"
+
+# 若 smartdns 未安装，跳过
+[ -x /usr/sbin/smartdns ] || exit 0
+
+mkdir -p /var/lib/smartdns /var/log
+
+# 生成默认配置
+cat > "$SMARTDNS_CONF" <<'CONFEOF'
+# ============================================================
+#  SmartDNS 默认配置 - 解决 GitHub DNS 污染
+# ============================================================
+
+# 监听：供 dnsmasq 转发使用
+bind [::]:5353
+bind-tcp [::]:5353
+
+# 国内公共 DNS（首选，低延迟）
+server 223.5.5.5
+server 223.6.6.6
+server 114.114.114.114
+
+# 可信上游（用于国外 / GitHub 分流）
+server 1.1.1.1 -group foreign
+server 8.8.8.8  -group foreign
+server 208.67.222.222 -group foreign
+
+# GitHub 相关域名强制走可信上游，规避 DNS 污染
+nameserver /github.com/foreign
+nameserver /githubusercontent.com/foreign
+nameserver /githubassets.com/foreign
+nameserver /gitlab.com/foreign
+nameserver /raw.githubusercontent.com/foreign
+nameserver /codeload.github.com/foreign
+nameserver /api.github.com/foreign
+nameserver /objects.githubusercontent.com/foreign
+nameserver /avatars.githubusercontent.com/foreign
+nameserver /releases.githubusercontent.com/foreign
+nameserver /cloudflare.com/foreign
+nameserver /jsdelivr.net/foreign
+nameserver /unpkg.com/foreign
+
+# 基础优化
+cache-size 4096
+cache-persist yes
+cache-file /var/lib/smartdns/smartdns.cache
+prefetch-domain yes
+serve-expired yes
+serve-expired-ttl 86400
+dualstack-ip-selection yes
+force-AAAA-SOA no
+log-level warn
+log-file /var/log/smartdns.log
+CONFEOF
+
+# 让 dnsmasq 把上游指向 smartdns（仅首次设置）
+if [ -f /etc/config/dhcp ]; then
+    if uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
+        uci -q set dhcp.@dnsmasq[0].noresolv="1"
+        uci -q add_list dhcp.@dnsmasq[0].server="127.0.0.1#5353"
+        uci -q commit dhcp
+    fi
+fi
+
+# 设置 SmartDNS 自启动并立即启动
+/etc/init.d/smartdns enable 2>/dev/null || true
+/etc/init.d/smartdns start  2>/dev/null || true
+
+exit 0

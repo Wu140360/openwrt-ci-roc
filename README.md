@@ -1,57 +1,161 @@
-<div align="center">
-<h1>OpenWrt — 云编译</h1>
+# 兆能 ZN-M2 OpenWrt 云编译配置（满血 NSS / 无 WiFi / 无 USB）
 
-## 特别提示
+专为 **兆能 ZN-M2**（高通 IPQ6000 / qualcommax ipq60xx）家庭主路由打造的轻量化 OpenWrt 25.12 云编译配置，基于 [laipeng668/openwrt-ci-roc](https://github.com/laipeng668/openwrt-ci-roc) 流程改造，fork 到自己的仓库后可直接 GitHub Actions 一键编译。
 
-- **本人不对任何人因使用本固件所遭受的任何理论或实际的损失承担责任！**
+> ⚠️ **硬件前提**：已硬改 **1GB RAM**（并刷好对应 CDT）、**无 USB 接口**、**已刷入第三方 U-Boot**。本配置完全不带 WiFi、不带 USB。
 
-- **本固件禁止用于任何商业用途，请务必严格遵守国家互联网使用相关法律规定！**
+---
 
-## 项目说明
-- 默认管理地址：**`192.168.2.1`**，默认用户：**`root`**，默认密码：**`none`**
-- [云编译来源](https://github.com/haiibo/OpenWrt) [视频教程](https://www.youtube.com/watch?v=6j4ofS0GT38) [问题合集](https://github.com/LiBwrt/openwrt-6.x/issues)
+## 一、硬件与需求对照
 
-## 仓库说明
-- 本人 fork 的仓库：[ImmortalWrt](https://github.com/laipeng668/immortalwrt) [LibWrt](https://github.com/laipeng668/openwrt-6.x)，内容大体一致。
-- `ImmortalWrt` 和 `LibWrt` 分别通过 rebase 和 merge 进行更新，相互印证。
-- `LibWrt` 因为 DTS 更为丰富，所以支持更多的机型。
+| 项目 | 本机情况 | 固件策略 |
+|---|---|---|
+| 内存 | 硬改 1GB（可识别约 907MB） | ✅ 保留满血 NSS（q6_region 默认 85MB 不缩减） |
+| 无线 | 无 / 不用 | ❌ 完全不带 WiFi（无 ath11k / wpad / hostapd） |
+| USB | 无 | ❌ 完全不带 USB（无 kmod-usb-* / 外置文件系统） |
+| 用途 | 家庭主路由 | ✅ IPv4 NAT + IPv6、DDNS、WireGuard、SmartDNS、QoS |
+| 宽带 | 无 IPv4 公网，有 IPv6 | ✅ DDNS + IPv6 穿透，SmartDNS 解决 GitHub DNS 污染 |
 
-## 定制固件
-- 首先要登录 Github 账号，然后 fork 此项目到你自己的 Github 仓库。
-- 修改 `configs` 目录对应的文件添加或删除插件，或者上传自己的 `xx.config` 配置文件。
-- 不需要的软件包请把 `y` 改成 `n` ，仅在前面添加 `#` 是无效的。
-- 插件对应名称及功能请参考恩山网友帖子：[OpenWrt软件包全量解释](https://www.right.com.cn/FORUM/forum.php?mod=viewthread&tid=8384897)。
-- 如需修改默认 IP、添加或删除插件包以及一些其他设置请在 `scripts/Roc-script.sh` 文件内修改。
-- 固件构建只会拉取设备配置和 `configs/General.config` 中实际启用的第三方软件包，并始终使用对应分支的最新提交。
-- 每次固件构建都会记录第三方仓库的实际分支和 commit，并在 Release 中附带 `<固件前缀>.third-party-sources.txt` 供核对；该记录文件不会写入固件。
-- 添加或修改 `xx.yml` 文件，最后点击 `Actions` 运行要编译的 `workflow` 即可开始编译。
-- 编译大概需要 1-2 小时，编译完成后在仓库主页 [Releases](https://github.com/laipeng668/openwrt-ci-roc/releases) 对应 Tag 标签内下载固件。
+---
 
-## 单独编译软件包
-- 点击 `Actions` 运行 `Build-Packages`，`sdk_version` 可选择 `ALL` 同时编译全部版本，或选择 `main` 主线 snapshots、`23.05`、`24.10`、`25.12` 系列的最新稳定版 SDK。
-- 默认同时编译 `x86-64` 和 `aarch64` 两个架构：`x86/64` 使用 `configs/x86-64.config + configs/Packages.config`；`aarch64` 在 `main`、`25.12` 使用 `configs/JDCloud.config + configs/Packages.config`，在 `23.05`、`24.10` 使用 SDK 脚本内置的 rax3000m 配置 + `configs/Packages.config`。
-- `package` 默认是 `ALL`，下拉只保留独立软件包 `nginx`，以及 `luci-app-aria2`、`luci-app-frpc`、`luci-app-frps`、`luci-app-gecoosac`、`luci-app-lucky`、`luci-app-openlist2`、`luci-theme-argon`、`luci-theme-aurora` 这些 LuCI 入口；选择 LuCI 软件包时会同时编译并发布对应基础包或主题配置插件，其中 `luci-app-aria2` 会一并处理 `aria2` 和 `ariang`。旧的 `aria2`、`ariang`、`frp`、`gecoosac`、`lucky`、`openlist2` 输入仅作为兼容别名保留。
-- 脚本会按每个矩阵的版本和架构从 `https://downloads.openwrt.org/` 自动查找对应 SDK，先验证官方签名和 SHA-256，再在本次构建中使用同一组精确 URL 与哈希，避免 snapshots 更新造成前后不一致。
-- SDK 签名信任锚来自 OpenWrt 官方 [`openwrt/keyring`](https://github.com/openwrt/keyring) 密钥仓库的构建公钥，仓库内固定主指纹为 `8A8BC12F46B836C0F9CDB36F1D53D1877742E911`；未知签名会直接终止构建，官方换钥时需人工核对后更新公钥。
-- `Build-Packages` 不使用 GitHub Actions 持久缓存；SDK 每次构建都会重新下载并验证签名和 SHA-256，软件包源码也会重新拉取。
-- 实际编译的软件包会参考 `configs/Packages.config` 里的软件包选项，例如 `aria2`、`ariang`、`frpc`、`frps`、`nginx-full`、`lucky`、`luci-app-gecoosac`、`luci-app-argon-config`、`luci-app-aurora-config`、`luci-app-lucky`、`luci-app-openlist2`、`luci-theme-argon` 和 `luci-theme-aurora`。
-- 编译的软件包来源及跟踪分支如下；每次构建都会拉取对应分支的最新提交，并把实际 commit 写入 `BUILDINFO.json`，不会固定第三方源码版本：
-  - `https://github.com/laipeng668/packages` 的 `aria2` 分支：`net/aria2`
-  - `https://github.com/laipeng668/packages` 的 `ariang` 分支：`net/ariang`
-  - `https://github.com/laipeng668/packages` 的 `frp-binary` 分支：`net/frp`
-  - `https://github.com/laipeng668/packages` 的 `nginx` 分支：`net/nginx`
-  - `https://github.com/laipeng668/luci` 的 `frp` 分支：`applications/luci-app-frpc`、`applications/luci-app-frps`
-  - `https://github.com/laipeng668/luci-app-gecoosac` 的 `main` 分支：`gecoosac`、`luci-app-gecoosac`
-  - `https://github.com/gdy666/luci-app-lucky` 的 `main` 分支：`lucky`、`luci-app-lucky`
-  - `https://github.com/laipeng668/luci-app-openlist2` 的 `main` 分支：`openlist2`、`luci-app-openlist2`
-  - `https://github.com/jerrykuku/luci-theme-argon` 的 `master` 分支：`luci-theme-argon`
-  - `https://github.com/jerrykuku/luci-app-argon-config` 的 `master` 分支：`luci-app-argon-config`
-  - `https://github.com/eamonxg/luci-theme-aurora` 的 `master` 分支：`luci-theme-aurora`
-  - `https://github.com/eamonxg/luci-app-aurora-config` 的 `master` 分支：`luci-app-aurora-config`
-- 编译产物会按 `<SDK>-<软件包>-<架构>.zip` 分组打包，上传到本次 workflow 的 `Artifacts`，并发布到 `Packages` 这个 [Releases](https://github.com/laipeng668/openwrt-ci-roc/releases/tag/Packages)；普通分组内的 `.apk/.ipk` 文件也使用对应架构后缀。`luci-theme-argon` 和 `luci-theme-aurora` 是通用主题包，使用 `all` 架构后缀，`arch=ALL` 时各自只保留一份。下载后先解压，`apk` 使用 `apk add --allow-untrusted *.apk` 安装，`ipk` 使用 `opkg install *.ipk` 安装。
-- 编译矩阵中部分任务失败时，工作流仍会把其他成功任务的产物发布到 `Packages` Release；如果没有任何成功产物，则跳过 Release 上传。用户主动取消工作流时不会继续发布。
-- 单个矩阵内的软件包会独立记录编译结果；部分软件包失败时，已成功的软件包仍会打包上传，同时该矩阵任务保持失败状态。每个 ZIP 内包含 `BUILDINFO.json` 和 `SHA256SUMS`，用于核对 SDK、源码版本、编译结果和文件哈希。
+## 二、固件核心特性
 
-## 页面预览
-![Homepage](Homepage.png)
-</div>
+### ✅ 已开启（功能清单）
+- **满血 NSS**：`NSS_FIRMWARE_VERSION_11_4`，q6_region 保持源码默认 85MB，**绝不缩减**
+- **NSS QoS**：`sqm-scripts-nss`（nss-qdisc + cake）+ `luci-app-sqm` WebUI，满血 NSS 下完美支持
+- **TurboACC 网络加速**：fast-classifier / shortcut-fe / nss-ifb
+- **WebUI**：LuCI + **Aurora 主题**（唯一，不重复），全简体中文（含插件 i18n）
+- **DNS**：SmartDNS（内置默认配置，**解决 GitHub DNS 污染**）+ dnsmasq
+- **DDNS**：luci-app-ddns（Cloudflare / DNSPod / Aliyun 脚本）
+- **WireGuard**：luci-proto-wireguard + luci-app-wireguard
+- **KMS**：vlmcsd + luci-app-vlmcsd
+- **TTYD 终端**：集成 bash / vim / nano / tmux / htop / ip / tcpdump / mtr / iperf3 等常用工具
+- **基础网络**：IPv6(odhcpd/odhcp6c)、UPnP、WoL、ACME、nlbwmon、LLDP、IGMP proxy
+- **稳定性**：cpufreq、autoreboot、watchcat、ZRAM swap、coremark
+- **主机名**：`openwrt`，默认地址 `192.168.2.1`
+- **包管理**：OpenWrt 25.12 默认 **apk**
+
+### ❌ 已彻底剔除（防臃肿 / 降发热）
+- 科学上网：passwall / passwall2 / openclash
+- 下载/文件：aria2 / nginx / frp / lucky / openlist2 / gecoosac
+- 通知/过滤：oaf / wechatpush / banip / arpbind
+- 存储：samba4 / diskman / hd-idle（无 USB / 无硬盘）
+- 主题：argon（仅保留 aurora，不重复）
+- 全部其他设备 profile（仅保留 `zn_m2` 单设备，缩减固件体积）
+
+---
+
+## 三、目录结构
+
+```
+.
+├── .github/
+│   └── workflows/
+│       ├── Build-OpenWrt.yml     # 通用构建核心（复用上游成熟流程）
+│       └── ZN-M2.yml             # ★ ZN-M2 专属入口（手动触发）
+├── configs/
+│   ├── ZN-M2.config              # ★ 设备配置（目标/包选择/剔除，单设备 zn_m2）
+│   └── General.config             # 通用配置（语言/i18n/签名/apk/全局开关）
+├── scripts/
+│   └── ZN-M2-script.sh           # ★ 定制脚本（主机名/主题/按需克隆 feeds/注入 SmartDNS）
+├── files/
+│   └── etc/uci-defaults/
+│       └── 99-smartdns-defaults   # SmartDNS 内置默认配置（首次开机执行）
+└── README.md
+```
+
+> 标记为 ★ 的是本次为 ZN-M2 **全新创建** 的文件，其余（Build-OpenWrt.yml）沿用项目成熟流程，仅修改了 `DIY_SCRIPT` 与缓存键引用。
+
+---
+
+## 四、使用方法（GitHub 即用）
+
+1. 将本目录内容推送到你 fork 的仓库根目录（即 `Wu140360/openwrt-ci-roc`）：
+   ```bash
+   git clone https://github.com/Wu140360/openwrt-ci-roc.git
+   cp -r zn_m2-configs/* openwrt-ci-roc/
+   cd openwrt-ci-roc
+   git add .
+   git commit -m "feat: add ZN-M2 dedicated config (no-wifi, no-usb, full NSS)"
+   git push
+   ```
+2. 进入仓库 **Actions** 页面 → 选择 **ZN-M2** workflow → **Run workflow**。
+3. 编译完成后，在 **Releases** 页面下载产物（已自动将 `qualcommax` 重命名为 `nowifi`）。
+
+### 刷机提示
+- 产物路径示例：`bin/targets/qualcommax/ipq60xx/`（或重命名后的 `nowifi` 目录）
+- 首次刷入建议先备份原厂分区，通过 U-Boot Web 刷 `*-factory.bin` 或 `*-sysupgrade.bin`
+- 刷机后若未识别 1GB，需确认 CDT 已更新（硬改时必须刷对应内存的 CDT）
+
+---
+
+## 五、关键设计说明
+
+### 1. q6_region 保持默认（满血 NSS）
+源码 `ipq6018.dtsi` 默认预留 85MB 给 NSS/q6 核心。本配置**不修改该值**，理由：
+- 已硬改 1GB RAM，内存充裕，无需牺牲 NSS 性能
+- 完全不带 WiFi，ath11k 不再与 NSS 争抢内存
+- 满血 NSS 是保证 QoS（nss-qdisc）、wireguard 卸载、NAT 加速的前提
+
+### 2. NSS QoS 方案（sqm-scripts-nss）
+这是 LibWrt / ImmortalWrt 生态在 IPQ60XX / IPQ807X 满血 NSS 下**唯一验证可用**的 QoS 方案：
+- 内核态 `nss-qdisc` 直接挂载到 NSS 加速引擎，不回退到 CPU
+- 用户态 `sqm-scripts-nss` 封装 cake / fq_codel 等队列规则
+- LuCI 端通过 `luci-app-sqm` 配置（**注意：不是**传统的 `luci-app-sqm-nss`，那是旧分支）
+- ⚠️ 使用时在 LuCI **网络 → SQM QoS** 中，将 `qdisc` 选为 `nss.qdisc`，`script` 选 `layer_cake.qos`
+
+### 3. SmartDNS 内置配置（解决 GitHub DNS 污染）
+`files/etc/uci-defaults/99-smartdns-defaults` 在首次开机时自动：
+- 写入 `/etc/smartdns/smartdns.conf`：国内 DNS（223.5.5.5 / 114.114.114.114）+ 可信上游（1.1.1.1 / 8.8.8.8）分组
+- 将 `github.com`、`githubusercontent.com`、`jsdelivr.net` 等域名强制走 `foreign` 组，规避 DNS 污染
+- 修改 dnsmasq 上游为 `127.0.0.1#5353`，由 SmartDNS 接管递归
+- 开机后可在 LuCI **服务 → SmartDNS** 二次微调
+
+### 4. 配置文件合并顺序与"is not set"陷阱
+`Build-OpenWrt.yml` 中合并顺序为：`ZN-M2.config` 在前，`General.config` 在后。
+**后出现的 `is not set` 会覆盖前面的 `=y`**。因此：
+- 所有"剔除项"统一维护在 `ZN-M2.config` 的"显式剔除"段落（单一事实源）
+- `General.config` **不**对已启用的包声明禁用，避免误关功能
+
+### 5. apk 包管理（OpenWrt 25.12）
+- 源码默认已集成 apk，本配置通过 `CONFIG_PACKAGE_apk=y` 显式启用
+- 固件内的软件源配置：`/etc/apk/repositories.d/distfeeds.list`
+- 离线安装示例：`apk add --allow-untrusted *.apk`
+
+---
+
+## 六、验证清单（刷机后逐项核对）
+
+- [ ] 系统 → 系统：主机名显示 `openwrt`，时区 Asia/Shanghai
+- [ ] 系统 → 软件：包管理器为 **APK**
+- [ ] LuCI 界面语言：简体中文，主题 Aurora
+- [ ] 系统 → TurboACC：NSS 加速已启用
+- [ ] 网络 → SQM QoS：选择 nss.qdisc + layer_cake，测试限速生效
+- [ ] 网络 → 接口：IPv4 + IPv6 双栈正常
+- [ ] 服务 → SmartDNS：启动成功，`nslookup github.com` 返回正确 IP
+- [ ] 服务 → ddns：Cloudflare/DNSPod 正常更新
+- [ ] 网络 → 接口 → WireGuard：握手成功
+- [ ] 服务 → vlmcsd：KMS 激活可用
+- [ ] 系统 → TTYD：可登录，bash / vim / tcpdump 等命令可用
+- [ ] 系统 → 负载：空载内存占用合理，长时间高负载无重启
+- [ ] 状态 → 概览：识别内存约 **907MB**（确认 1GB + NSS 预留后剩余）
+
+---
+
+## 七、故障排查
+
+| 现象 | 排查方向 |
+|---|---|
+| 内存只识别 256MB | CDT 未更新，需刷硬改 1GB 对应 CDT |
+| NSS QoS 不生效 | SQM 中 qdisc 是否选 `nss.qdisc`，`kmod-sched-nss` 是否加载 |
+| SmartDNS 未分流 | 检查 `/etc/smartdns/smartdns.conf` 的 `nameserver /github.com/foreign` |
+| GitHub 仍污染 | 确认 dnsmasq 上游已指向 127.0.0.1#5353，smartdns 服务运行 |
+| 编译失败 | 查看 Actions 日志；多为 feeds 冲突，可 `./scripts/feeds update -i -a` 本地验证 |
+
+---
+
+## 参考
+- 上游编译流程：https://github.com/laipeng668/openwrt-ci-roc
+- LibWrt（NSS 方案）：https://github.com/laipeng668/LibWrt
+- OpenWrt 25.12 apk 迁移：https://openwrt.org/docs/guide-user/additional-software/opkg-to-apk-cheatsheet
+- 软件包解释（right.com.cn）：https://www.right.com.cn/forum/forum.php?mod=viewthread&tid=8384897
