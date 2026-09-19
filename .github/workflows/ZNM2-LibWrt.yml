@@ -1,0 +1,45 @@
+name: ZNM2-LibWrt
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_version:
+        description: 'OpenWrt SDK 版本'
+        required: false
+        default: '25.12'
+        type: choice
+        options:
+          - '25.12'
+          - 'main'
+          - '24.10'
+  # schedule:
+  #   - cron: "0 18 * * 0"
+  # push:
+  #   branches:
+  #     - main
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  Build:
+    uses: ./.github/workflows/Build-OpenWrt.yml
+    permissions:
+      contents: write
+      actions: write
+    with:
+      repo_url: https://github.com/laipeng668/LibWrt.git
+      repo_branch: 25.12-nss
+      config_file: configs/znm2.config
+      firmware_tag: ZNM2
+      kernel_file: kernel-6.12
+      artifact_prefix: ZNM2
+      manifest_file: libwrt-qualcommax-ipq60xx.manifest
+      release_tag: ZNM2
+      package_extension: apk
+      release_summary: >-
+        兆能M2 (zn_m2) 家庭主路由固件 - 完全无WiFi/无USB, 满血NSS,
+        NSS硬件QoS (qosify + qca-nss-qdisc), SmartDNS (GitHub DNS防污染),
+        DDNS (Cloudflare), WireGuard VPN, KMS激活服务, TTYD终端,
+        Aurora主题 + 简体中文, 性能优化 (BBR + ZRAM + schedutil),
+        适用于IPQ6000 1GB内存硬改版本。
