@@ -1,0 +1,37 @@
+name: ZN-M2-LibWrt
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  # schedule:
+  #   - cron: "0 18 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  Build:
+    uses: ./.github/workflows/Build-OpenWrt.yml
+    permissions:
+      contents: write
+      actions: write
+    with:
+      repo_url: https://github.com/laipeng668/LibWrt.git
+      repo_branch: 25.12-nss
+      config_file: configs/ZN-M2.config
+      firmware_tag: ZN-M2
+      kernel_file: kernel-6.12
+      artifact_prefix: ZN-M2
+      manifest_file: libwrt-qualcommax-ipq60xx-zn_m2.manifest
+      release_summary: >-
+        兆能 M2 (ZN-M2) 精简主路由固件：IPQ6000 / 6.12 内核 / 满血 NSS（q6_region 保持上游默认，不缩减），
+        无 WiFi、无 USB，Aurora 主题 + 简体中文；内置 TTYD 终端（含 tcpdump / tc / ip / iperf3 等诊断工具）、
+        vlmcsd(KMS)、DDNS(含 Cloudflare)、WireGuard、SmartDNS、UPnP、WoL、CPU 调频、定时重启与看门狗；
+        默认启用 zram-swap、IPv4/IPv6 双栈、PPPoE、nftables 防火墙。不含科学上网、下载器、广告过滤、
+        Samba、磁盘管理等本机无 USB/无外接存储场景下用不到的组件。编译前请按 Packages-M2.config 中
+        [需核实] 标注核对 ddns-scripts-cloudflare / luci-i18n-smartdns-zh-cn 等符号在当前源码中的确切命名。
+      remove_sqm_scripts_nss: false
+      rename_qualcommax_to_nowifi: true
+      delete_old_workflows: false
+      package_extension: apk
