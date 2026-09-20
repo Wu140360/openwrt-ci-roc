@@ -23,7 +23,7 @@ jobs:
       firmware_tag: ZN-M2
       kernel_file: kernel-6.12
       artifact_prefix: ZN-M2
-      manifest_file: libwrt-qualcommax-ipq60xx-zn_m2.manifest
+      manifest_file: libwrt-qualcommax-ipq60xx.manifest
       release_summary: >-
         兆能 M2 (ZN-M2) 精简主路由固件：IPQ6000 / 6.12 内核 / 满血 NSS（q6_region 保持上游默认，不缩减），
         无 WiFi、无 USB，Aurora 主题 + 简体中文；内置 TTYD 终端（含 tcpdump / tc / ip / iperf3 等诊断工具）、
