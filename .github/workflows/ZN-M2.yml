@@ -46,6 +46,7 @@ jobs:
       firmware_tag: ZN-M2
       kernel_file: kernel-6.12
       artifact_prefix: ZN-M2
+      # manifest 文件名交由 Build-OpenWrt.yml 自动探测（兼容带/不带设备名两种命名）
       manifest_file: libwrt-qualcommax-ipq60xx.manifest
       # ---- 默认设置 ----
       release_summary: >-

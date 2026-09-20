@@ -28,8 +28,9 @@ on:
         required: true
         type: string
       manifest_file:
-        required: true
+        required: false
         type: string
+        default: libwrt-qualcommax-ipq60xx.manifest
       release_summary:
         required: true
         type: string
@@ -322,10 +323,39 @@ jobs:
         MANIFEST_FILE: ${{ inputs.manifest_file }}
         PACKAGE_EXTENSION: ${{ inputs.package_extension }}
       run: |
+        set -e
         cd "$OPENWRT_PATH"/bin/targets/*/*
         cp "$OPENWRT_PATH/.config" "$ARTIFACT_PREFIX.config"
         mv config.buildinfo "$ARTIFACT_PREFIX.config.buildinfo"
-        mv "$MANIFEST_FILE" "$ARTIFACT_PREFIX.manifest"
+        ### ----- manifest 兼容处理 -----
+        ### OpenWrt 25.12 + CONFIG_TARGET_PER_DEVICE_ROOTFS=y 时，manifest 命名带设备名：
+        ###   libwrt-qualcommax-ipq60xx-<device>.manifest   （本设备即 -zn_m2）
+        ### 若改为 n 或上游调整，可能回落到不带设备名的形式。
+        ### 此处按「精确设备名 → 通用前缀 → 兜底任意」三级探测，
+        ### 保证单设备构建（本配置锁定 zn_m2 profile）永不因文件名报错。
+        echo "Looking for manifest: MANIFEST_FILE=$MANIFEST_FILE PWD=$(pwd)"
+
+        manifest_found=""
+        # ① 精确：前缀 + 当前设备名（-zn_m2）
+        exact="${MANIFEST_FILE%.manifest}-zn_m2.manifest"
+        if [ -f "$exact" ]; then
+          manifest_found="$exact"
+        # ② 通用前缀：libwrt-qualcommax-ipq60xx*.manifest（单设备目录里唯一匹配）
+        elif ls -1 "${MANIFEST_FILE%.manifest}"*.manifest 2>/dev/null | grep -q .; then
+          manifest_found="$(ls -1 "${MANIFEST_FILE%.manifest}"*.manifest 2>/dev/null | head -n 1)"
+        # ③ 兜底：目录里任何 *.manifest
+        elif ls -1 *.manifest 2>/dev/null | grep -q .; then
+          manifest_found="$(ls -1 *.manifest 2>/dev/null | head -n 1)"
+        fi
+
+        if [ -n "$manifest_found" ] && [ -f "$manifest_found" ]; then
+          mv "$manifest_found" "$ARTIFACT_PREFIX.manifest"
+          echo "manifest resolved: $manifest_found -> $ARTIFACT_PREFIX.manifest"
+        else
+          echo "Error: no *.manifest file found in $(pwd)" >&2
+          echo "::group::directory listing"; ls -la; echo "::endgroup::"
+          exit 1
+        fi
         case "$PACKAGE_EXTENSION" in
           apk | ipk) ;;
           *)
