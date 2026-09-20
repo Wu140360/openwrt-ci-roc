@@ -1,0 +1,115 @@
+#!/bin/sh
+### ============================================================
+###  兆能 M2 默认设置（首次启动执行一次，幂等）
+###  职责：设备名 / 网络 / DNS(SmartDNS+dnsmasq) / QoS / ttyd / 主题 / 时区
+### ============================================================
+set -e
+
+# 工具函数：确保某 config 至少有一个 section
+uci_ensure_section() {
+    # uci_ensure_section <config> <type> -> 返回首个 section name，无则新建
+    local cfg="$1" type="$2" sec
+    sec="$(uci -q show "$cfg" | sed -n "s/^$cfg\.\(@$type\[0\]\)=.*/\1/p" | head -n1)"
+    if [ -z "$sec" ]; then
+        sec="$(uci add "$cfg" "$type")"
+    fi
+    printf '%s\n' "$sec"
+}
+
+# ---------- 1. 系统：设备名 + 时区 ----------
+sys="$(uci_ensure_section system system)"
+uci set "system.$sys.hostname=openwrt"
+uci set "system.$sys.timezone=CST-8"
+uci set "system.$sys.zonename=Asia/Shanghai"
+uci commit system
+
+# ---------- 2. 网络：LAN 地址 192.168.2.1 ----------
+uci set network.lan.ipaddr='192.168.2.1'
+uci set network.lan.netmask='255.255.255.0'
+uci commit network
+
+# ---------- 3. DHCP：IPv4 + IPv6（有 IPv6 公网，启用 RA/DHCPv6）----------
+lan_dhcp="$(uci_ensure_section dhcp dhcp)"
+uci set "dhcp.$lan_dhcp.interface=lan"
+uci set "dhcp.$lan_dhcp.ignore=0"
+uci set "dhcp.$lan_dhcp.limit=150"
+uci set "dhcp.$lan_dhcp.leasetime=12h"
+uci set "dhcp.$lan_dhcp.ra=server"
+uci set "dhcp.$lan_dhcp.dhcpv6=server"
+###     ndp：若 WAN 侧为 DHCPv6-PD 且需要透传，改为 relay 并指定 wan 口；默认留空由 odhcpd 自动处理
+# uci set "dhcp.$lan_dhcp.ndp=relay"
+uci commit dhcp
+
+# ---------- 4. DNS：SmartDNS 监听 53，dnsmasq 退化为纯 DHCP ----------
+dnsm="$(uci_ensure_section dhcp dnsmasq)"
+uci set "dhcp.$dnsm.port=0"
+uci set "dhcp.$dnsm.localuse=0"
+uci set "dhcp.$dnsm.noresolv=1"
+uci delete "dhcp.$dnsm.server" 2>/dev/null || true
+uci commit dhcp
+
+if [ -x /etc/init.d/smartdns ]; then
+    sm="$(uci_ensure_section smartdns smartdns)"
+    uci set "smartdns.$sm.enabled=1"
+    uci set "smartdns.$sm.redirect=none"
+    uci set "smartdns.$sm.port=53"
+    uci commit smartdns
+fi
+
+# ---------- 5. NSS QoS：默认【不启用】（按需求"硬件QoS默认关闭，按需开启"）----------
+#     如需启用：uci set nss-qos.@nss-qos[0].enabled=1 && uci commit && /etc/init.d/nss-qos start
+if [ -x /etc/init.d/nss-qos ]; then
+    uci set nss-qos.@nss-qos[0].enabled=0 2>/dev/null || true
+    /etc/init.d/nss-qos disable 2>/dev/null || true
+fi
+
+# ---------- 6. ttyd Web 终端：启用 + 集成常用工具 ----------
+if [ -x /etc/init.d/ttyd ]; then
+    tt="$(uci_ensure_section ttyd ttyd)"
+    uci set "ttyd.$tt.enabled=1"
+    uci set "ttyd.$tt.interface=@lan"
+    uci set "ttyd.$tt.command=/bin/login"
+    uci commit ttyd
+    /etc/init.d/ttyd enable
+fi
+
+# 常用诊断命令脚本
+cat > /usr/bin/network-tools <<'EOF'
+#!/bin/sh
+echo "=== 兆能 M2 常用工具 ==="
+echo "  netstatus  接口/路由/连接总览"
+echo "  dnstest    SmartDNS 解析测试（国内 & github）"
+echo "  nsstest    NSS 模块 / 统计"
+echo "  qosstatus  NSS QoS 队列统计"
+echo "  bandtest   本地回环带宽自检（需远端 iperf3 -s）"
+EOF
+chmod +x /usr/bin/network-tools
+
+cat > /etc/profile.d/znm2-tools.sh <<'EOF'
+alias netstatus='ip addr show; echo "---"; ip route show; echo "---"; ss -tn state established'
+alias dnstest='nslookup github.com 127.0.0.1; nslookup www.baidu.com 127.0.0.1'
+alias nsstest='lsmod | grep -i nss; echo "---"; for f in /proc/net/nss/*; do echo "== $f =="; head -c 500 "$f"; done 2>/dev/null'
+alias qosstatus='tc -s qdisc show; echo "---"; tc -s class show'
+alias bandtest='iperf3 -c 127.0.0.1 -t 5 2>/dev/null || echo "tip: run iperf3 -s on a remote host"'
+EOF
+chmod +x /etc/profile.d/znm2-tools.sh
+
+# ---------- 7. UPnP / KMS / DDNS：默认启用 ----------
+[ -x /etc/init.d/miniupnpd ] && /etc/init.d/miniupnpd enable
+[ -x /etc/init.d/vlmcsd ] && /etc/init.d/vlmcsd enable
+[ -x /etc/init.d/ddns ] && /etc/init.d/ddns enable
+
+# ---------- 8. 主题锁定 Aurora ----------
+uci set luci.main.mediaurlbase='/luci-static/aurora' 2>/dev/null || true
+uci commit luci
+
+# ---------- 9. 兜底：关闭 WiFi（无无线硬件，确保不产生 wireless 配置）----------
+command -v wifi >/dev/null 2>&1 && wifi down 2>/dev/null || true
+if uci -q show wireless >/dev/null 2>&1; then
+    for i in $(uci -q show wireless | sed -n 's/^wireless\.\(@wifi-iface\[[0-9]\]\)=.*/\1/p'); do
+        uci set "wireless.$i.disabled=1" 2>/dev/null || true
+    done
+    uci commit wireless
+fi
+
+exit 0

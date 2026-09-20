@@ -1,0 +1,9 @@
+config nss-qos 'nss-qos'
+	# 默认关闭：IPQ60XX + 6.12 的 nss_qdisc 缺充分实测，避免影响稳定性
+	# 启用：uci set nss-qos.@nss-qos[0].enabled=1 && uci commit && /etc/init.d/nss-qos start
+	option enabled '0'
+	option download_rate '950mbit'
+	option priority_rate '400mbit'
+	option normal_rate '400mbit'
+	option bulk_rate '150mbit'
+	option iface 'br-lan'

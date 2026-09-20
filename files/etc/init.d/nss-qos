@@ -1,0 +1,101 @@
+#!/bin/sh /etc/rc.common
+### ============================================================
+###  NSS 硬件 QoS 服务
+###  机制：tc qdisc/class/filter -> NSS qdisc 卸载 -> Ethernet DMA
+###  方向：LAN 侧 egress（下载限速）；WAN 侧仅分类优先
+###  分类：nftables 打 fwmark（0x10 高 / 0x20 普通 / 0x30 低）
+###  用法：/etc/init.d/nss-qos [start|stop|restart|status|load|unload]
+### ============================================================
+START=99
+USE_PROCD=1
+
+### 【默认关闭】多方核对结论：IPQ60XX + 6.12 内核的 nss_qdisc 缺少充分实测证据，
+### 为避免影响"高负载持续工作"的稳定性，默认 DISABLED。
+### 如需启用：uci set nss-qos.@nss-qos[0].enabled=1 && uci commit && /etc/init.d/nss-qos start
+ENABLED="0"
+[ -x /sbin/uci ] && ENABLED="$(uci -q get nss-qos.@nss-qos[0].enabled 2>/dev/null || true)"
+case "$ENABLED" in 1 | true | yes | on) ;; *)
+  logger -t nss-qos "disabled by default (set nss-qos.@nss-qos[0].enabled=1 to enable)"
+  exit 0
+  ;;
+esac
+
+DOWNLOAD_RATE="950mbit"
+PRIORITY_RATE="400mbit"
+NORMAL_RATE="400mbit"
+BULK_RATE="150mbit"
+
+resolve_iface() {
+    QOS_IFACE="$(uci -q get network.lan.device)"
+    [ -z "$QOS_IFACE" ] && QOS_IFACE="br-lan"
+}
+
+load_rules() {
+    resolve_iface
+    if ! command -v tc >/dev/null 2>&1; then
+        logger -t nss-qos "tc not available, skip"
+        return 0
+    fi
+    [ -d "/sys/class/net/$QOS_IFACE" ] || {
+        logger -t nss-qos "iface $QOS_IFACE not ready, skip"
+        return 0
+    }
+
+    # 若内核存在 nss_qdisc 模块，优先加载以将调度卸载到 NSS 引擎；不存在则退化为标准 HTB
+    if [ -d /sys/module/nss_qdisc ] || modprobe nss_qdisc 2>/dev/null; then
+        logger -t nss-qos "nss_qdisc engaged (hardware offload)"
+    else
+        logger -t nss-qos "nss_qdisc not present, falling back to software HTB"
+    fi
+
+    tc qdisc del dev "$QOS_IFACE" root 2>/dev/null || true
+
+    tc qdisc add dev "$QOS_IFACE" root handle 1: htb default 30
+    tc class add dev "$QOS_IFACE" parent 1: classid 1:1 htb rate "$DOWNLOAD_RATE"
+    tc class add dev "$QOS_IFACE" parent 1:1 classid 1:10 htb rate "$PRIORITY_RATE" ceil "$DOWNLOAD_RATE" prio 1
+    tc class add dev "$QOS_IFACE" parent 1:1 classid 1:20 htb rate "$NORMAL_RATE"  ceil "$DOWNLOAD_RATE" prio 2
+    tc class add dev "$QOS_IFACE" parent 1:1 classid 1:30 htb rate "$BULK_RATE"   ceil "$DOWNLOAD_RATE" prio 3
+
+    tc filter add dev "$QOS_IFACE" protocol ip parent 1:0 prio 1 handle 0x10 fw flowid 1:10
+    tc filter add dev "$QOS_IFACE" protocol ip parent 1:0 prio 2 handle 0x20 fw flowid 1:20
+    tc filter add dev "$QOS_IFACE" protocol ip parent 1:0 prio 3 handle 0x30 fw flowid 1:30
+
+    # 加载流量分类规则（nftables 打 fwmark，与上方 tc filter handle 对应）
+    if command -v nft >/dev/null 2>&1 && [ -f /etc/nss-qos/traffic-classify.nft ]; then
+        nft -f /etc/nss-qos/traffic-classify.nft 2>/dev/null || true
+    fi
+
+    logger -t nss-qos "rules loaded on $QOS_IFACE"
+}
+
+unload_rules() {
+    resolve_iface
+    tc qdisc del dev "$QOS_IFACE" root 2>/dev/null || true
+    command -v nft >/dev/null 2>&1 && nft delete table inet traffic_classify 2>/dev/null || true
+}
+
+# ---- procd 启动：延迟等待 LAN 桥就绪 ----
+start_service() {
+    procd_open_instance "nss-qos"
+    procd_set_param command /bin/sh -c ". /etc/init.d/nss-qos; sleep 10; load_rules"
+    procd_set_param respawn
+    procd_close_instance
+}
+
+stop_service() {
+    unload_rules
+}
+
+reload_service() {
+    unload_rules
+    load_rules
+}
+
+EXTRA_COMMANDS="load unload status"
+EXTRA_HELP="	load	apply NSS QoS rules
+	unload	remove NSS QoS rules
+	status	show qdisc/class stats"
+
+load()   { load_rules; }
+unload() { unload_rules; }
+status() { resolve_iface; tc -s qdisc show dev "$QOS_IFACE"; echo "---"; tc -s class show dev "$QOS_IFACE"; }

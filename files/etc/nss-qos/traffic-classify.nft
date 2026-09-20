@@ -1,0 +1,27 @@
+# ============================================================
+#  流量分类规则（nftables） —— 为 NSS QoS 打 fwmark
+#  0x10 = 高优先（游戏/语音/SSH/DNS/ICMP）
+#  0x20 = 普通（HTTP/HTTPS/视频会议）
+#  0x30 = 低优先（大文件/备份/默认）
+#  fwmark 由 tc filter 读取，映射到 HTB class
+# ============================================================
+
+table inet traffic_classify {
+    chain postrouting {
+        type filter hook postrouting priority mangle; policy accept;
+
+        # ---- 高优先级：DNS / ICMP / SSH / VoIP / 游戏常用端口 ----
+        meta l4proto { tcp, udp } th dport 53  meta mark set 0x00000010
+        meta l4proto { tcp, udp } th dport 22  meta mark set 0x00000010
+        meta l4proto { tcp, udp } th dport { 5060, 5061, 5004, 5005, 10000-20000 } meta mark set 0x00000010
+        # 常用游戏 / 语音端口示例（可按需追加）
+        meta l4proto udp th dport { 3478, 5349, 500, 4500 } meta mark set 0x00000010
+        # ICMP 优先
+        meta l4proto icmp  meta mark set 0x00000010
+        meta l4proto ipv6-icmp  meta mark set 0x00000010
+
+        # ---- 普通：HTTP/HTTPS / 视频会议 ----
+        meta l4proto tcp th dport { 80, 443, 8080 }  meta mark set 0x00000020
+        meta l4proto tcp th dport { 1935, 3478, 5349 }  meta mark set 0x00000020
+    }
+}
