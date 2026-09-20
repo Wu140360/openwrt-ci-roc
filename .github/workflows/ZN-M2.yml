@@ -1,0 +1,61 @@
+name: ZN-M2
+
+### ============================================================
+###  兆能 M2 (zn_m2 / IPQ6018) 构建入口
+###  - 调用通用构建流程 ./.github/workflows/Build-OpenWrt.yml
+###  - 源码：laipeng668/LibWrt 分支 25.12-nss（IPQ60XX / 6.12 内核 / 满血 NSS）
+###  - 配置：configs/ZN-M2.config（设备层） + configs/General.config（通用层）
+###  - DIY 脚本：scripts/ZN-M2-script.sh
+### ============================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 固件 release 标签（默认 ZN-M2）
+        required: false
+        default: 'ZN-M2'
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: false
+        default: 'ZN-M2'
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  Build:
+    uses: ./.github/workflows/Build-OpenWrt.yml
+    permissions:
+      contents: write
+      actions: write
+    with:
+      # ---- 源码 ----
+      repo_url: https://github.com/laipeng668/LibWrt
+      repo_branch: 25.12-nss
+      # ---- 配置：设备 config + 通用 config（DIY 脚本自动合并）----
+      config_file: configs/ZN-M2.config
+      general_config: configs/General.config
+      # ---- DIY 脚本（本设备专属，默认 Roc-script.sh 被覆盖）----
+      diy_script: scripts/ZN-M2-script.sh
+      # ---- 产物 / 内核 ----
+      firmware_tag: ZN-M2
+      kernel_file: kernel-6.12
+      artifact_prefix: ZN-M2
+      manifest_file: libwrt-qualcommax-ipq60xx.manifest
+      # ---- 默认设置 ----
+      release_summary: >-
+        兆能 M2 (zn_m2, IPQ6018) 家庭主路由固件：满血 NSS（保留默认 q6_region，不缩减）、
+        硬件 NSS QoS（NSS qdisc 卸载，无软 QoS）、完全不带 WiFi、不带 USB；
+        基础网络齐全（PPPoE / IPv6 / DHCP / DDNS / UPnP / KMS），集成 SmartDNS 抗 DNS 污染
+        （GitHub 等走加密 foreign 组）、WireGuard VPN、ttyd Web 终端（含常用诊断工具）、
+        Aurora 主题 + 全简体中文；包管理器 APK；设备名 openwrt，LAN 192.168.2.1。
+      # ---- 固件调整开关 ----
+      remove_sqm_scripts_nss: false   # 本配置不安装 SQM，无需移除
+      rename_qualcommax_to_nowifi: false  # 仅改内部配置去 WiFi，不改产物文件名（保证 U-Boot 分区兼容）
+      delete_old_workflows: false
+      package_extension: apk

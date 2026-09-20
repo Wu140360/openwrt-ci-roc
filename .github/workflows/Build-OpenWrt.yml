@@ -1,5 +1,11 @@
 name: Build-OpenWrt
 
+### ============================================================
+###  通用构建流程（reusable workflow）
+###  增强：新增可选 input `diy_script`，用于按设备指定 DIY 脚本
+###        （默认 scripts/Roc-script.sh，保持既有设备兼容）
+### ============================================================
+
 on:
   workflow_call:
     inputs:
@@ -43,6 +49,16 @@ on:
         required: false
         type: string
         default: apk
+      ### [增强] 可按设备覆盖 DIY 脚本；不传则使用默认 Roc-script.sh
+      diy_script:
+        required: false
+        type: string
+        default: scripts/Roc-script.sh
+      ### [增强] 可按设备覆盖通用配置文件路径
+      general_config:
+        required: false
+        type: string
+        default: configs/General.config
 
 permissions:
   contents: read
@@ -53,8 +69,8 @@ defaults:
     shell: bash
 
 env:
-  GENERAL_CONFIG_FILE: configs/General.config
-  DIY_SCRIPT: scripts/Roc-script.sh
+  GENERAL_CONFIG_FILE: ${{ inputs.general_config }}
+  DIY_SCRIPT: ${{ inputs.diy_script }}
   OPENWRT_PATH: /mnt/openwrt
   TZ: Asia/Shanghai
 
@@ -92,8 +108,8 @@ jobs:
         for disk in /dev/sd*; do
           [ -e "$disk" ] || continue
           case "$disk" in
-            *[0-9]) ;;
-            *) disk_count=$((disk_count + 1)) ;;
+          *[0-9]) ;;
+          *) disk_count=$((disk_count + 1)) ;;
           esac
         done
         echo "硬盘数量：$disk_count"
@@ -171,7 +187,7 @@ jobs:
       id: variables
       env:
         ARTIFACT_PREFIX: ${{ inputs.artifact_prefix }}
-        CUSTOMIZATION_HASH: ${{ hashFiles('scripts/Roc-script.sh', 'configs/General.config', inputs.config_file) }}
+        CUSTOMIZATION_HASH: ${{ hashFiles('scripts/Roc-script.sh', 'scripts/ZN-M2-script.sh', 'configs/General.config', inputs.config_file) }}
         REPO_URL: ${{ inputs.repo_url }}
         REPO_BRANCH: ${{ inputs.repo_branch }}
         CONFIG_FILE: ${{ inputs.config_file }}
@@ -261,7 +277,6 @@ jobs:
         fi
         make defconfig
         if [ -d staging_dir ]; then
-          # Refresh component stamps before aggregate stamps so restored host tools and toolchains remain valid.
           tools_stamp="$(find staging_dir/host -maxdepth 2 -type f -name '.tools_compile*' -print -quit 2>/dev/null || true)"
           if [ -n "$tools_stamp" ]; then
             find staging_dir/host/stamp -maxdepth 1 -type f ! -name '.tools_compile*' -exec touch {} + 2>/dev/null || true
@@ -363,7 +378,6 @@ jobs:
     concurrency:
       group: openwrt-release-${{ github.repository }}-${{ inputs.artifact_prefix }}
       cancel-in-progress: false
-
     steps:
     - name: Download Firmware Artifact(下载固件产物)
       uses: actions/download-artifact@v4
@@ -398,13 +412,12 @@ jobs:
   Cleanup:
     runs-on: ubuntu-24.04
     needs:
-      - Build
-      - Release
+    - Build
+    - Release
     if: ${{ !cancelled() && needs.Build.result == 'success' && needs.Release.result == 'success' }}
     permissions:
       contents: read
       actions: write
-
     steps:
     - name: Delete Old Cache(删除旧缓存)
       env:
@@ -420,7 +433,6 @@ jobs:
           local current_created_at
           local key_prefix="${current_key%-*}"
           key_prefix="${key_prefix%-*}-"
-
           cache_list_file="$(mktemp "$RUNNER_TEMP/openwrt-cache-list.XXXXXX.json")"
           gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$key_prefix" --limit 10000 --sort created_at --order desc --json id,key,createdAt > "$cache_list_file"
           current_created_at="$(jq -r --arg key "$current_key" '[.[] | select(.key == $key) | .createdAt] | first // empty' "$cache_list_file")"
@@ -429,7 +441,6 @@ jobs:
             rm -f "$cache_list_file"
             return 0
           fi
-
           jq -r --arg key "$current_key" --arg created_at "$current_created_at" \
             '.[] | select(.key != $key and .createdAt < $created_at) | [.id, .key] | @tsv' "$cache_list_file" |
             while IFS=$'\t' read -r cache_id cache_key; do
@@ -438,7 +449,6 @@ jobs:
             done
           rm -f "$cache_list_file"
         }
-
         delete_old_cache_versions "$CCACHE_KEY"
         delete_old_cache_versions "$STAGING_KEY"
 
