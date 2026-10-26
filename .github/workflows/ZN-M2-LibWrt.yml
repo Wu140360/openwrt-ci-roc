@@ -1,0 +1,39 @@
+name: ZN-M2-LibWrt
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  # schedule:
+  #   - cron: "0 18 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  Build:
+    uses: ./.github/workflows/Build-OpenWrt.yml
+    permissions:
+      contents: write
+      actions: write
+    with:
+      repo_url: https://github.com/laipeng668/openwrt-6.x.git
+      repo_branch: 25.12-nss
+      config_file: configs/ZN-M2.config
+      firmware_tag: ZN-M2
+      kernel_file: kernel-6.12
+      artifact_prefix: ZN-M2
+      manifest_file: libwrt-qualcommax-ipq60xx.manifest
+      release_summary: >-
+        兆能 M2 (ZN-M2 / IPQ6000) 家庭主路由固件，内核 6.12、LibWrt 25.12-nss 分支、apk 包管理；
+        满血 NSS 仅有线卸载：ECM 为唯一卸载引擎（PPPoE / bridge / VLAN / 组播 MCS / qdisc 硬件整形 + nssifb 入向整形），
+        q6_region 保持上游默认不缩减（512MB 内存档 NSS_MEM_PROFILE_MEDIUM）。
+        完全不带 WiFi：ath11k 驱动与固件、wpad/hostapd、ipq-wifi-* 、NSS wifi-meshmgr 与全部 NSS_DRV_WIFI* 均已剔除。
+        带 USB3.0：dwc3 控制器、UASP、ext4/vfat/exfat/ntfs3、block-mount 与 hd-idle，热插即用的移动硬盘/NAS 盘位。
+        系统为极简稳定取向：zram-swap + TCP BBR + watchcat + 定时重启，Aurora 主题 + 简体中文；
+        内置 ttyd 终端（ip/ss/nstat、ethtool、tcpdump、iperf3、mtr、dig、smartmontools、nssinfo、qca-ssdk-shell），
+        常用插件仅 vlmcsd(KMS)、DDNS(Cloudflare)、WireGuard、SmartDNS、lucky、UPnP、WoL、HD-Idle、文件管理、SQM。
+        默认启用 IPv4/IPv6 双栈与 nftables 防火墙；不含任何科学上网、下载器、Samba、Docker、广告过滤与统计采集组件。
+        默认地址 192.168.2.1，主机名 Roc，用户名 root，密码无。
+      remove_sqm_scripts_nss: false
+      package_extension: apk
