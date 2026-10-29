@@ -1,0 +1,36 @@
+name: ZNM2-LibWrt
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  # schedule:
+  #   - cron: "0 18 * * *"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  Build:
+    uses: ./.github/workflows/Build-OpenWrt.yml
+    permissions:
+      contents: write
+      actions: write
+    with:
+      repo_url: https://github.com/laipeng668/openwrt-6.x.git
+      repo_branch: 25.12-nss
+      config_file: configs/ZNM2.NoWiFi.config
+      firmware_tag: ZNM2
+      kernel_file: kernel-6.12
+      artifact_prefix: ZNM2
+      # MULTI_PROFILE 下 PROFILE 为空，清单名不带设备后缀（与 IPQ60XX-LibWrt 一致）
+      manifest_file: libwrt-qualcommax-ipq60xx.manifest
+      # 需要 NSS 硬件 QoS，必须 false：true 会把 CONFIG_PACKAGE_sqm-scripts-nss=y 从 .config 里删掉
+      remove_sqm_scripts_nss: false
+      rename_qualcommax_to_nowifi: false
+      package_extension: apk
+      release_summary: >-
+        兆能 M2（ZN-M2 / IPQ6000）主路由精简固件：单设备、完全无 WiFi、满血 NSS（去 WiFi 部分）、
+        完整 USB3.0、Aurora 主题、简体中文、apk 包管理；含 WireGuard、SQM（nss-rk 硬件整形 + cake/fq_codel 软件整形可切换）、
+        SmartDNS、Lucky、EasyTier、vlmcsd(KMS)、nlbwmon、ttyd、diskman、UPnP、WoL；
+        已移除 PassWall/OpenClash 等科学上网组件与全部 WiFi 驱动/固件，具体见 ZNM2.NoWiFi.config 和 General.config。
