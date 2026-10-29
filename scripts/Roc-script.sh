@@ -157,6 +157,54 @@ sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.r
 # sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x04000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
 # sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x06000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
 
+# ===== ZN-M2 定制：设备树（关 WiFi / 开 USB3）=====
+# zn_m2 板级 DTS 为 ipq6000-m2.dts，经 ipq6000-cmiot.dtsi 引入 ipq6018-common.dtsi，
+# 后者已把 &qusb_phy_0 / &ssphy_0 / &usb3 置 okay，故 USB3 控制器本身无需新增节点；
+# 这里再做一次幂等覆盖，防止上游 dtsi 变动导致 USB3 静默失效。
+zn_m2_dts="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-m2.dts"
+if [ -f "$zn_m2_dts" ]; then
+  # 无 WiFi：&wifi 置 disabled（配合 config 已剔除 ath11k，双保险省电降热）
+  if grep -q '^&wifi {' "$zn_m2_dts"; then
+    sed -i '/^&wifi {/,/^};/ s/status = "okay";/status = "disabled";/' "$zn_m2_dts"
+    grep -q 'status = "disabled";' "$zn_m2_dts" || echo "::warning::$zn_m2_dts 的 &wifi 未能置为 disabled"
+  else
+    echo "::warning::$zn_m2_dts 中未找到 &wifi 节点，跳过 WiFi 关闭"
+  fi
+
+  # USB3：幂等补一次 okay（标签取自内核 ipq6018.dtsi：usb3=DesignWare 控制器、ssphy_0=USB3 PHY、qusb_phy_0=USB2/高速 PHY）
+  if ! grep -q '&usb3' "$zn_m2_dts"; then
+    cat >> "$zn_m2_dts" <<'EOF'
+
+&qusb_phy_0 {
+	status = "okay";
+};
+
+&ssphy_0 {
+	status = "okay";
+};
+
+&usb3 {
+	status = "okay";
+};
+EOF
+  fi
+  # 硬改说明：VBUS 直取 5V（无 GPIO 控制）时到此即可，不要加 vbus-supply；
+  # 若硬改板用 GPIO 控制 VBUS，需在 / 节点补 reg_usb_vbus（参考 ipq6000-mr7350.dts 的 regulator-fixed），
+  # 并在上面的 &usb3 内加一行 vbus-supply = <&reg_usb_vbus>;
+fi
+
+# ===== ZN-M2 定制：剔除 ipq-wifi-zn_m2 =====
+# 它是 image/ipq60xx.mk 里 zn_m2 的 DEVICE_PACKAGES 默认项，config 的 =n 压不住 DEVICE_PACKAGES；
+# 无 ath11k 时它只是一个用不上的校准板级文件，直接在 mk 里删掉省体积。
+ipq60xx_mk="target/linux/qualcommax/image/ipq60xx.mk"
+if [ -f "$ipq60xx_mk" ]; then
+  sed -i '/^define Device\/zn_m2$/,/^endef$/ s/^[[:space:]]*DEVICE_PACKAGES[[:space:]]*:=[[:space:]]*ipq-wifi-zn_m2[[:space:]]*$//' "$ipq60xx_mk"
+  if awk '/^define Device\/zn_m2$/,/^endef$/' "$ipq60xx_mk" | grep -q 'ipq-wifi-zn_m2'; then
+    echo "Error: 未能从 zn_m2 的 DEVICE_PACKAGES 中移除 ipq-wifi-zn_m2" >&2
+    exit 1
+  fi
+fi
+
 # 调节IPQ60XX的1.5GHz频率电压(从0.9375V提高到0.95V，过低可能导致不稳定，过高可能增加功耗和发热，具体数值需要根据实际情况调整)
 # sed -i 's/opp-microvolt = <937500>;/opp-microvolt = <950000>;/' target/linux/qualcommax/patches-6.12/0038-v6.16-arm64-dts-qcom-ipq6018-add-1.5GHz-CPU-Frequency.patch
 
@@ -289,6 +337,12 @@ fi
 
 if package_enabled luci-app-lucky lucky; then
   clone_repository https://github.com/gdy666/luci-app-lucky main package/luci-app-lucky
+fi
+
+# EasyTier：官方 LuCI 源（分支 main，目录 easytier / luci-app-easytier，包名 easytier + luci-app-easytier）
+# 该源的 easytier 包在 Build/Prepare 里 wget 官方 release 的 aarch64 压缩包，需要外网可达 GitHub Releases
+if package_enabled luci-app-easytier easytier; then
+  git_sparse_clone main https://github.com/EasyTier/luci-app-easytier easytier luci-app-easytier
 fi
 
 if package_enabled luci-app-wechatpush; then
