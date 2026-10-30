@@ -23,7 +23,9 @@ jobs:
       firmware_tag: IPQ60XX
       kernel_file: kernel-6.12
       artifact_prefix: IPQ60XX
-      manifest_file: libwrt-qualcommax-ipq60xx.manifest
+      # 单机型（非 MULTI_PROFILE）构建时 PROFILE=DEVICE_zn_m2，
+      # LibWrt 的 manifest 名为 $(IMG_PREFIX)-$(PROFILE_SANITIZED).manifest
+      manifest_file: libwrt-qualcommax-ipq60xx-zn_m2.manifest
       # 本固件使用 sqm-scripts-nss（硬件简易 QoS），不要剔除
       remove_sqm_scripts_nss: false
       # 无 WiFi 固件：产物文件名中的 qualcommax 替换为 nowifi，便于区分
