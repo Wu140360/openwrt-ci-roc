@@ -1,0 +1,313 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# /usr/sbin/qos-switch - 兆能 M2 三态 QoS 切换
+#
+#   qos-switch off      关闭整形，恢复 ECM/NSS 满血硬件加速
+#   qos-switch nss      硬件简易 QoS：nss-ifb + nsstbl + nssfq_codel（实验）
+#   qos-switch qosify   软件多功能 QoS：qosify(eBPF+CAKE)，需停用 ECM
+#   qos-switch apply    按 /etc/config/qosmode 的 mode 应用
+#   qos-switch status   显示当前模式与 tc 状态
+#
+# 三态互斥：ECM 把流交给 NSS 固件后不再经过 Linux qdisc，因此软件 QoS 与
+# ECM/NSS 硬件加速不能同时生效（NSS 机制的硬约束）。
+#
+# 说明：OpenWrt 默认只有 busybox ash，没有 bash，故使用 POSIX sh（set -eu）。
+
+set -eu
+
+CONF="qosmode"
+NSSIFB="nssifb"
+WAN_IF="wan"
+SRC_DEV="eth0"
+UL=0
+DL=0
+MODE="off"
+
+log() {
+	logger -t qos-switch -p user.notice "qos-switch: $*" 2>/dev/null || true
+}
+
+err() {
+	logger -t qos-switch -p user.err "qos-switch: $*" 2>/dev/null || true
+	echo "qos-switch: $*" >&2
+}
+
+uci_get() {
+	uci -q get "$CONF.main.$1" 2>/dev/null || true
+}
+
+load_config() {
+	WAN_IF="$(uci_get wan)"
+	[ -n "$WAN_IF" ] || WAN_IF="wan"
+	SRC_DEV="$(uci_get src_dev)"
+	[ -n "$SRC_DEV" ] || SRC_DEV="eth0"
+	UL="$(uci_get upload)"
+	DL="$(uci_get download)"
+	case "$UL" in '' | *[!0-9]*) UL=0 ;; esac
+	case "$DL" in '' | *[!0-9]*) DL=0 ;; esac
+}
+
+dev_exists() {
+	[ -n "${1:-}" ] && ip link show "$1" >/dev/null 2>&1
+}
+
+wan_device() {
+	local dev
+
+	dev="$(uci -q get "network.$WAN_IF.device" 2>/dev/null || true)"
+	if [ -z "$dev" ] && command -v jsonfilter >/dev/null 2>&1; then
+		dev="$(ubus call "network.interface.$WAN_IF" status 2>/dev/null |
+			jsonfilter -e '@.l3_device' 2>/dev/null || true)"
+	fi
+	[ -n "$dev" ] || dev="$WAN_IF"
+	printf '%s\n' "$dev"
+}
+
+del_qdiscs() {
+	local dev="$1"
+	local parent
+
+	dev_exists "$dev" || return 0
+
+	tc qdisc del dev "$dev" ingress >/dev/null 2>&1 || true
+	# 先删子节点再删 root，避免 NSS qdisc 统计路径报错
+	tc qdisc show dev "$dev" 2>/dev/null |
+		awk '$1 == "qdisc" && $4 == "parent" { print $5 }' |
+		sort -t: -k1nr,2nr |
+		while read -r parent; do
+			[ -n "$parent" ] || continue
+			tc qdisc del dev "$dev" parent "$parent" >/dev/null 2>&1 || true
+		done
+	tc qdisc del dev "$dev" root >/dev/null 2>&1 || true
+}
+
+stop_software_qos() {
+	if [ -x /etc/init.d/qosify ]; then
+		/etc/init.d/qosify stop >/dev/null 2>&1 || true
+	fi
+	if [ -x /etc/init.d/sqm ]; then
+		/etc/init.d/sqm stop >/dev/null 2>&1 || true
+	fi
+}
+
+ecm_start() {
+	if [ -x /etc/init.d/qca-nss-ecm ]; then
+		/etc/init.d/qca-nss-ecm start >/dev/null 2>&1 || true
+	fi
+}
+
+ecm_stop() {
+	if [ -x /etc/init.d/qca-nss-ecm ]; then
+		/etc/init.d/qca-nss-ecm stop >/dev/null 2>&1 || true
+	fi
+}
+
+nssifb_down() {
+	ip link set "$NSSIFB" down >/dev/null 2>&1 || true
+	rmmod nss-ifb >/dev/null 2>&1 || true
+}
+
+# 加载 nss-ifb 并把源接口切换到 WAN 所在 NSS 物理接口（默认 eth0）
+nssifb_up() {
+	local param
+
+	if [ ! -d /sys/module/nss_ifb ]; then
+		modprobe nss-ifb >/dev/null 2>&1 || {
+			err "无法加载 nss-ifb 内核模块"
+			return 1
+		}
+	fi
+
+	for param in \
+		/sys/module/nss_ifb/parameters/nss_src_dev \
+		/sys/module/nss_ifb/parameters/nss_dev_name; do
+		if [ -w "$param" ]; then
+			printf '%s' "$SRC_DEV" > "$param" 2>/dev/null || true
+		fi
+	done
+
+	ip link set "$NSSIFB" up >/dev/null 2>&1 || {
+		err "无法启用 $NSSIFB 接口"
+		return 1
+	}
+	return 0
+}
+
+# 在指定设备上挂 NSS 令牌桶 + fq_codel（rate 单位 kbit/s，0 表示跳过）
+add_nss_shaper() {
+	local dev="$1"
+	local rate="$2"
+	local burst
+
+	[ "$rate" -gt 0 ] || return 0
+	dev_exists "$dev" || {
+		err "设备不存在：$dev"
+		return 1
+	}
+
+	# 约 10ms 的突发量，最小 32KiB
+	burst=$((rate * 1000 / 8 / 100))
+	[ "$burst" -ge 32768 ] || burst=32768
+
+	del_qdiscs "$dev"
+
+	tc qdisc add dev "$dev" root handle 1: nsstbl rate "${rate}kbit" burst "$burst" || {
+		err "在 $dev 上挂载 nsstbl 失败（${rate}kbit）"
+		return 1
+	}
+	tc qdisc add dev "$dev" parent 1: handle 10: nssfq_codel \
+		limit 10240 flows 1024 quantum 1514 target 5ms interval 100ms set_default || {
+		err "在 $dev 上挂载 nssfq_codel 失败"
+		return 1
+	}
+
+	log "$dev: NSS 整形已生效（${rate}kbit，burst ${burst}B）"
+	return 0
+}
+
+mode_off() {
+	stop_software_qos
+	del_qdiscs "$(wan_device)"
+	del_qdiscs "$NSSIFB"
+	nssifb_down
+	ecm_start
+	if [ -x /etc/init.d/firewall ]; then
+		/etc/init.d/firewall restart >/dev/null 2>&1 || true
+	fi
+	if [ -x /etc/init.d/network ]; then
+		/etc/init.d/network reload >/dev/null 2>&1 || true
+	fi
+	log "QoS 已关闭，ECM/NSS 硬件加速生效"
+}
+
+mode_nss() {
+	local wan
+	local module
+
+	stop_software_qos
+	ecm_start
+
+	# nsstbl / nssfq_codel 由 qca-nss-qdisc.ko 注册，显式加载避免 tc 自动加载失败
+	for module in qca_nss_drv qca_nss_qdisc ecm; do
+		modprobe "$module" >/dev/null 2>&1 || true
+	done
+
+	wan="$(wan_device)"
+	del_qdiscs "$wan"
+	del_qdiscs "$NSSIFB"
+
+	nssifb_up || return 1
+
+	if [ "$DL" -gt 0 ]; then
+		add_nss_shaper "$NSSIFB" "$DL" || err "下行整形未生效"
+	else
+		log "下行带宽为 0，跳过下行整形"
+	fi
+
+	if [ "$UL" -gt 0 ]; then
+		if ! add_nss_shaper "$wan" "$UL"; then
+			if [ "$SRC_DEV" != "$wan" ]; then
+				log "$wan 不支持 NSS qdisc，改用 NSS 物理接口 $SRC_DEV"
+				add_nss_shaper "$SRC_DEV" "$UL" || err "上行整形未生效"
+			fi
+		fi
+	else
+		log "上行带宽为 0，跳过上行整形"
+	fi
+
+	log "硬件简易 QoS 已启用：wan=$wan src_dev=$SRC_DEV up=${UL}kbit down=${DL}kbit"
+}
+
+write_qosify_config() {
+	uci -q batch <<-EOF
+		delete qosify.wan
+		set qosify.wan='interface'
+		set qosify.wan.name='$WAN_IF'
+		set qosify.wan.ingress='1'
+		set qosify.wan.egress='1'
+		set qosify.wan.mode='diffserv4'
+		commit qosify
+	EOF
+
+	if [ "$UL" -gt 0 ]; then
+		uci -q set "qosify.wan.bandwidth_up=${UL}kbit"
+	fi
+	if [ "$DL" -gt 0 ]; then
+		uci -q set "qosify.wan.bandwidth_down=${DL}kbit"
+	fi
+	uci -q commit qosify
+}
+
+mode_qosify() {
+	stop_software_qos
+	del_qdiscs "$(wan_device)"
+	del_qdiscs "$NSSIFB"
+	nssifb_down
+
+	# qosify 依赖 Linux qdisc/eBPF，必须停掉 ECM，否则被加速流不经过 qdisc
+	ecm_stop
+
+	write_qosify_config
+	if [ -x /etc/init.d/qosify ]; then
+		/etc/init.d/qosify restart >/dev/null 2>&1 || {
+			err "qosify 启动失败"
+			return 1
+		}
+	else
+		err "qosify 未安装"
+		return 1
+	fi
+
+	log "软件多功能 QoS 已启用：qosify mode=diffserv4 up=${UL}kbit down=${DL}kbit（ECM 已停）"
+}
+
+show_status() {
+	echo "=== qos-switch: 当前模式 ${MODE} ==="
+	tc -s qdisc show 2>/dev/null || true
+	log "mode=$MODE; $(tc -s qdisc show 2>/dev/null | tr '\n' ' ' | cut -c1-400)"
+}
+
+load_config
+ACTION="${1:-apply}"
+
+case "$ACTION" in
+	off | nss | qosify)
+		MODE="$ACTION"
+		uci -q set "$CONF.main.mode=$MODE" 2>/dev/null || true
+		uci -q commit "$CONF" 2>/dev/null || true
+		;;
+	apply)
+		MODE="$(uci_get mode)"
+		[ -n "$MODE" ] || MODE=off
+		;;
+	status)
+		MODE="$(uci_get mode)"
+		[ -n "$MODE" ] || MODE=off
+		show_status
+		exit 0
+		;;
+	*)
+		echo "用法: $0 [off|nss|qosify|apply|status]" >&2
+		exit 1
+		;;
+esac
+
+case "$MODE" in
+	off)
+		mode_off
+		;;
+	nss)
+		mode_nss || err "应用 nss 模式失败，请检查 nss-ifb / nss qdisc"
+		;;
+	qosify)
+		mode_qosify || err "应用 qosify 模式失败，请检查 qosify 配置"
+		;;
+	*)
+		err "未知 QoS 模式：$MODE"
+		exit 1
+		;;
+esac
+
+show_status
+exit 0

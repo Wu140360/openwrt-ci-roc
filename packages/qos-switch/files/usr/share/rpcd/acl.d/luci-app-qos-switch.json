@@ -1,0 +1,17 @@
+{
+	"luci-app-qos-switch": {
+		"description": "Grant access to the QoS mode switcher",
+		"read": {
+			"uci": [ "qosmode" ],
+			"file": {
+				"exec": [ "/usr/sbin/qos-switch" ]
+			}
+		},
+		"write": {
+			"uci": [ "qosmode" ],
+			"file": {
+				"exec": [ "/usr/sbin/qos-switch" ]
+			}
+		}
+	}
+}

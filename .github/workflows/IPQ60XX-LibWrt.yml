@@ -24,5 +24,14 @@ jobs:
       kernel_file: kernel-6.12
       artifact_prefix: IPQ60XX
       manifest_file: libwrt-qualcommax-ipq60xx.manifest
+      # 本固件使用 sqm-scripts-nss（硬件简易 QoS），不要剔除
+      remove_sqm_scripts_nss: false
+      # 无 WiFi 固件：产物文件名中的 qualcommax 替换为 nowifi，便于区分
+      rename_qualcommax_to_nowifi: true
       release_summary: >-
-        这是开启全功能NSS的6.12内核固件，默认主题为Aurora；该固件在ImmortalWrt的基础上，添加了额外的软件包cpufreq、ddns、upnp、wol、samba4、vlmcsd、autoreboot、uhttpd、frps、frpc、diskman、hd-idle、acme、wireguard、watchcat、3cat、passwall，并添加了若干工具，具体详见IPQ60XX.config和General.config。
+        兆能 M2（ZN-M2 / IPQ6000，硬改 512M RAM + USB3.0）专属精简固件：完全不带 WiFi
+        （无 ath11k / ipq-wifi / hostapd / wpad，镜像与软件包均无无线组件），保留满血有线 NSS
+        加速（ECM + NSS 有线子模块，NSS 固件 11.4，q6_region 保持源码默认不缩减），
+        aurora 主题 + 全简体中文 LuCI，KMS、WireGuard、SmartDNS、lucky 万吉 3.5.0
+        （含 FileBrowser/Rclone）、EasyTier、nlbwmon 流量统计、samba4 文件共享、USB3.0 存储/网卡/串口，
+        以及「关闭 / 硬件简易 QoS(NSS) / 软件多功能 QoS(qosify)」三态一键切换（默认关闭，满血 NSS）。

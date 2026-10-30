@@ -1,0 +1,55 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# 兆能 M2 出厂调优（仅首次启动/升级后执行一次）
+# 由 scripts/Roc-script.sh 把 files/ 注入到 OpenWrt 根文件系统覆盖层。
+
+# ---------------------------------------------------------------------------
+# 1) 关闭软件/硬件 flow offloading
+#    ECM 已把流转交 NSS 固件，OpenWrt 的 flow offloading 与 NSS 互斥，
+#    同时开启会造成重复加速/统计异常。
+# ---------------------------------------------------------------------------
+if [ -f /etc/config/firewall ]; then
+	uci -q set firewall.@defaults[0].flow_offloading='0'
+	uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+	uci -q commit firewall
+fi
+
+# ---------------------------------------------------------------------------
+# 2) 时区：中国标准时间
+# ---------------------------------------------------------------------------
+if [ -f /etc/config/system ]; then
+	uci -q set system.@system[0].timezone='CST-8'
+	uci -q set system.@system[0].zonename='Asia/Shanghai'
+	uci -q commit system
+fi
+
+# ---------------------------------------------------------------------------
+# 3) CPU 调频：schedutil（保留全部可用频率，按负载调频控发热）
+# ---------------------------------------------------------------------------
+if [ -f /etc/config/cpufreq ]; then
+	uci -q set cpufreq.cpufreq.governor0='schedutil'
+	uci -q commit cpufreq
+fi
+
+# ---------------------------------------------------------------------------
+# 4) ttyd 默认启用（web 终端）
+# ---------------------------------------------------------------------------
+if [ -f /etc/config/ttyd ]; then
+	uci -q set ttyd.@ttyd[0].enable='1'
+	uci -q commit ttyd
+fi
+
+# ---------------------------------------------------------------------------
+# 5) QoS 默认关闭（满血 NSS 硬件加速）；需要时在 LuCI「QoS 模式」中切换
+# ---------------------------------------------------------------------------
+if [ -f /etc/config/qosmode ]; then
+	uci -q set qosmode.main.mode='off'
+	uci -q commit qosmode
+fi
+
+# ---------------------------------------------------------------------------
+# 6) 流量统计 nlbwmon 保持默认（不强制启用，避免无谓写入）
+# ---------------------------------------------------------------------------
+
+exit 0

@@ -1,0 +1,13 @@
+{
+	"admin/network/qos_switch": {
+		"title": "QoS 模式",
+		"order": 60,
+		"action": {
+			"type": "cbi",
+			"path": "qos-switch"
+		},
+		"depends": {
+			"acl": [ "luci-app-qos-switch" ]
+		}
+	}
+}

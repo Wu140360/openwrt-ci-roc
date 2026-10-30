@@ -1,0 +1,8 @@
+# QoS 三态模式配置（由 /usr/sbin/qos-switch 读取）
+
+config qosmode 'main'
+	option mode 'off'
+	option wan 'wan'
+	option src_dev 'eth0'
+	option upload '0'
+	option download '0'

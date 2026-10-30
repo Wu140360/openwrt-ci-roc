@@ -1,0 +1,31 @@
+#!/bin/sh /etc/rc.common
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# 开机时按 /etc/config/qosmode 的 mode 应用 QoS 模式。
+# START=95：在 network(20)、firewall(19) 之后执行，确保接口与 ECM 已就绪。
+# mode=off（默认）时无需任何动作：ECM 自身随开机启动，即满血 NSS 加速状态。
+
+START=95
+USE_PROCD=0
+
+boot() {
+	local mode
+
+	mode="$(uci -q get qosmode.main.mode 2>/dev/null || echo off)"
+	case "$mode" in
+		'' | off)
+			return 0
+			;;
+	esac
+
+	/usr/sbin/qos-switch apply >/dev/null 2>&1 || true
+}
+
+start() {
+	boot
+}
+
+stop() {
+	# 停止本服务不改变用户选择的模式，也不主动拆除已有整形/加速配置
+	:
+}

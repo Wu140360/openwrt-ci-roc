@@ -1,57 +1,123 @@
-<div align="center">
-<h1>OpenWrt — 云编译</h1>
+# 兆能 M2（ZN-M2）OpenWrt 25.12 满血 NSS 精简固件
 
-## 特别提示
+本仓库是 [openwrt-ci-roc](https://github.com/laipeng668/openwrt-ci-roc) 的定制分支，**只为一个设备**
+编译固件：**兆能 M2（ZN-M2）**。固件完全不带 WiFi，保留满血有线 NSS 加速，使用 aurora 主题与
+全简体中文 LuCI。
 
-- **本人不对任何人因使用本固件所遭受的任何理论或实际的损失承担责任！**
+## 设备与源码
 
-- **本固件禁止用于任何商业用途，请务必严格遵守国家互联网使用相关法律规定！**
+| 项 | 值 |
+|---|---|
+| 设备 | 兆能 M2（ZN-M2），Qualcomm IPQ6000（4×A53 1.2GHz + NPU），aarch64_cortex-a53 |
+| 硬件 | 硬改 512M RAM + USB3.0；已刷暗云 uboot 扩容分区 |
+| OpenWrt | LibWrt `25.12-nss` 分支（OpenWrt 25.12 稳定版 + 满血 NSS，内核 6.12） |
+| 源码 | <https://github.com/laipeng668/openwrt-6.x.git> |
+| 目标 | `qualcommax` / `ipq60xx` / profile `zn_m2` |
+| 固件格式 | UBI（`Device/FitImage` + `Device/UbiFit`），factory.ubi / sysupgrade.bin |
+| 包管理 | `apk`（OpenWrt 25.12 起） |
+| 默认地址 | `192.168.2.1`，默认无密码 |
 
-## 项目说明
-- 默认管理地址：**`192.168.2.1`**，默认用户：**`root`**，默认密码：**`none`**
-- [云编译来源](https://github.com/haiibo/OpenWrt) [视频教程](https://www.youtube.com/watch?v=6j4ofS0GT38) [问题合集](https://github.com/LiBwrt/openwrt-6.x/issues)
+## 如何触发编译
 
-## 仓库说明
-- 本人 fork 的仓库：[ImmortalWrt](https://github.com/laipeng668/immortalwrt) [LibWrt](https://github.com/laipeng668/openwrt-6.x)，内容大体一致。
-- `ImmortalWrt` 和 `LibWrt` 分别通过 rebase 和 merge 进行更新，相互印证。
-- `LibWrt` 因为 DTS 更为丰富，所以支持更多的机型。
+1. 打开本仓库的 **Actions** 页面；
+2. 选择工作流 **IPQ60XX-LibWrt**；
+3. 在右侧 **Run workflow** 中把分支切换为 **`2`**（本定制分支），再点击运行；
+4. 编译完成后固件会发布到 **Releases**（tag：`IPQ60XX`），也可在本次运行页面下载 Artifact。
 
-## 定制固件
-- 首先要登录 Github 账号，然后 fork 此项目到你自己的 Github 仓库。
-- 修改 `configs` 目录对应的文件添加或删除插件，或者上传自己的 `xx.config` 配置文件。
-- 不需要的软件包请把 `y` 改成 `n` ，仅在前面添加 `#` 是无效的。
-- 插件对应名称及功能请参考恩山网友帖子：[OpenWrt软件包全量解释](https://www.right.com.cn/FORUM/forum.php?mod=viewthread&tid=8384897)。
-- 如需修改默认 IP、添加或删除插件包以及一些其他设置请在 `scripts/Roc-script.sh` 文件内修改。
-- 固件构建只会拉取设备配置和 `configs/General.config` 中实际启用的第三方软件包，并始终使用对应分支的最新提交。
-- 每次固件构建都会记录第三方仓库的实际分支和 commit，并在 Release 中附带 `<固件前缀>.third-party-sources.txt` 供核对；该记录文件不会写入固件。
-- 添加或修改 `xx.yml` 文件，最后点击 `Actions` 运行要编译的 `workflow` 即可开始编译。
-- 编译大概需要 1-2 小时，编译完成后在仓库主页 [Releases](https://github.com/laipeng668/openwrt-ci-roc/releases) 对应 Tag 标签内下载固件。
+> 也可以把仓库默认分支设为 `2`，这样 Actions 页面默认就运行本分支。
+> 工作流只编译 `IPQ60XX-LibWrt`，其余机型的工作流与配置已从本分支移除。
 
-## 单独编译软件包
-- 点击 `Actions` 运行 `Build-Packages`，`sdk_version` 可选择 `ALL` 同时编译全部版本，或选择 `main` 主线 snapshots、`23.05`、`24.10`、`25.12` 系列的最新稳定版 SDK。
-- 默认同时编译 `x86-64` 和 `aarch64` 两个架构：`x86/64` 使用 `configs/x86-64.config + configs/Packages.config`；`aarch64` 在 `main`、`25.12` 使用 `configs/JDCloud.config + configs/Packages.config`，在 `23.05`、`24.10` 使用 SDK 脚本内置的 rax3000m 配置 + `configs/Packages.config`。
-- `package` 默认是 `ALL`，下拉只保留独立软件包 `nginx`，以及 `luci-app-aria2`、`luci-app-frpc`、`luci-app-frps`、`luci-app-gecoosac`、`luci-app-lucky`、`luci-app-openlist2`、`luci-theme-argon`、`luci-theme-aurora` 这些 LuCI 入口；选择 LuCI 软件包时会同时编译并发布对应基础包或主题配置插件，其中 `luci-app-aria2` 会一并处理 `aria2` 和 `ariang`。旧的 `aria2`、`ariang`、`frp`、`gecoosac`、`lucky`、`openlist2` 输入仅作为兼容别名保留。
-- 脚本会按每个矩阵的版本和架构从 `https://downloads.openwrt.org/` 自动查找对应 SDK，先验证官方签名和 SHA-256，再在本次构建中使用同一组精确 URL 与哈希，避免 snapshots 更新造成前后不一致。
-- SDK 签名信任锚来自 OpenWrt 官方 [`openwrt/keyring`](https://github.com/openwrt/keyring) 密钥仓库的构建公钥，仓库内固定主指纹为 `8A8BC12F46B836C0F9CDB36F1D53D1877742E911`；未知签名会直接终止构建，官方换钥时需人工核对后更新公钥。
-- `Build-Packages` 不使用 GitHub Actions 持久缓存；SDK 每次构建都会重新下载并验证签名和 SHA-256，软件包源码也会重新拉取。
-- 实际编译的软件包会参考 `configs/Packages.config` 里的软件包选项，例如 `aria2`、`ariang`、`frpc`、`frps`、`nginx-full`、`lucky`、`luci-app-gecoosac`、`luci-app-argon-config`、`luci-app-aurora-config`、`luci-app-lucky`、`luci-app-openlist2`、`luci-theme-argon` 和 `luci-theme-aurora`。
-- 编译的软件包来源及跟踪分支如下；每次构建都会拉取对应分支的最新提交，并把实际 commit 写入 `BUILDINFO.json`，不会固定第三方源码版本：
-  - `https://github.com/laipeng668/packages` 的 `aria2` 分支：`net/aria2`
-  - `https://github.com/laipeng668/packages` 的 `ariang` 分支：`net/ariang`
-  - `https://github.com/laipeng668/packages` 的 `frp-binary` 分支：`net/frp`
-  - `https://github.com/laipeng668/packages` 的 `nginx` 分支：`net/nginx`
-  - `https://github.com/laipeng668/luci` 的 `frp` 分支：`applications/luci-app-frpc`、`applications/luci-app-frps`
-  - `https://github.com/laipeng668/luci-app-gecoosac` 的 `main` 分支：`gecoosac`、`luci-app-gecoosac`
-  - `https://github.com/gdy666/luci-app-lucky` 的 `main` 分支：`lucky`、`luci-app-lucky`
-  - `https://github.com/laipeng668/luci-app-openlist2` 的 `main` 分支：`openlist2`、`luci-app-openlist2`
-  - `https://github.com/jerrykuku/luci-theme-argon` 的 `master` 分支：`luci-theme-argon`
-  - `https://github.com/jerrykuku/luci-app-argon-config` 的 `master` 分支：`luci-app-argon-config`
-  - `https://github.com/eamonxg/luci-theme-aurora` 的 `master` 分支：`luci-theme-aurora`
-  - `https://github.com/eamonxg/luci-app-aurora-config` 的 `master` 分支：`luci-app-aurora-config`
-- 编译产物会按 `<SDK>-<软件包>-<架构>.zip` 分组打包，上传到本次 workflow 的 `Artifacts`，并发布到 `Packages` 这个 [Releases](https://github.com/laipeng668/openwrt-ci-roc/releases/tag/Packages)；普通分组内的 `.apk/.ipk` 文件也使用对应架构后缀。`luci-theme-argon` 和 `luci-theme-aurora` 是通用主题包，使用 `all` 架构后缀，`arch=ALL` 时各自只保留一份。下载后先解压，`apk` 使用 `apk add --allow-untrusted *.apk` 安装，`ipk` 使用 `opkg install *.ipk` 安装。
-- 编译矩阵中部分任务失败时，工作流仍会把其他成功任务的产物发布到 `Packages` Release；如果没有任何成功产物，则跳过 Release 上传。用户主动取消工作流时不会继续发布。
-- 单个矩阵内的软件包会独立记录编译结果；部分软件包失败时，已成功的软件包仍会打包上传，同时该矩阵任务保持失败状态。每个 ZIP 内包含 `BUILDINFO.json` 和 `SHA256SUMS`，用于核对 SDK、源码版本、编译结果和文件哈希。
+## 主要功能
 
-## 页面预览
-![Homepage](Homepage.png)
-</div>
+### 系统 / WebUI
+- aurora 主题（`luci-theme-aurora` + `luci-app-aurora-config`），全简体中文（`zh_Hans`）
+- 包管理界面 `luci-app-package-manager`（apk）、uhttpd、firewall、ttyd Web 终端
+- CPU 调频 `luci-app-cpufreq`（默认 `schedutil`，保留最高频可用）、autoreboot、watchcat、hd-idle
+- zram-swap（LZ4）、smartmontools + drivedb、hdparm、zoneinfo-asia、openssh-sftp-server
+- 常用命令行工具：nano-full、htop、tmux、dmesg、ip-full、ip-bridge、ethtool-full、tcpdump-mini、
+  iperf3、mtr、curl、ca-certificates、jq、strace、lsblk、fstrim、tune2fs、fdisk、cfdisk、sgdisk、
+  block-mount
+
+### 网络
+- PPPoE（ppp / kmod-pppoe / kmod-pppox / kmod-slhc / pppoe-discovery / luci-proto-ppp）
+- IPv6（odhcp6c / odhcpd-ipv6only / luci-proto-ipv6）、FullCone NAT（`kmod-nft-fullcone`）
+- UPnP（`luci-app-upnp` + `miniupnpd-nftables`）、WireGuard、omcproxy（IPTV 组播）
+- 不安装 6in4/6rd/6to4/dslite/map、mwan3、macvlan
+
+### 满血 NSS（仅有线）
+- ECM + 有线 NSS 子模块：`kmod-qca-nss-drv`、`kmod-qca-nss-ecm`、`-qdisc`、`-igs`、`-bridge-mgr`、
+  `-pppoe`、`-tun6rd`、`-gre`、`-l2tpv2`、`-map-t`、`-clmapmgr`、`-tunipip6`、`kmod-nss-ifb`
+- `NSS_DRV_*_ENABLE`（BRIDGE/IPV6/VIRT_IF/PPPOE/VLAN/LAG/TUN6RD/GRE/L2TP/MAPT/CLMAP/TUNIPIP6/SHAPER/IGS）
+  在 nss_packages 中默认全部为 `n`，配置里已显式置 `y`，否则 ECM 等子模块会因依赖不满足被丢弃
+- `kmod-qca-nss-drv-match` 依赖 `NSS_DRV_WIFIOFFLOAD_ENABLE`（WiFi offload 分类器），无 WiFi 固件不启用
+- NSS 固件版本固定 11.4；`q6_region` **保持源码默认预留**，未做任何缩减
+- 未启用 `CONFIG_FEED_nss_packages`（NSS 驱动随 LibWrt 的 nss_packages feed 参与构建）
+
+### 完全不带 WiFi
+- 不编译 `kmod-ath11k*`、`ath11k-firmware-ipq6018`、`ipq-wifi-zn_m2`、`wpad*`、`hostapd-common`、
+  `kmod-qca-nss-drv-wifi-meshmgr`、`luci-app-wifischedule`
+- `configs/IPQ60XX.config` 中已删除 `CONFIG_ATH11K_*`
+
+### 应用
+- KMS：`luci-app-vlmcsd` + `vlmcsd`
+- SmartDNS：`luci-app-smartdns` + `smartdns`
+- lucky **万吉（wanji）3.5.0**：`luci-app-lucky` + `lucky`，二进制由构建脚本替换为官方
+  `lucky_3.5.0_Linux_arm64_wanji.tar.gz`（aarch64，含 FileBrowser / Rclone）。
+  因此不再重复安装 rclone、filebrowser、webdav、FTP、DDNS、ACME 等插件。
+- EasyTier：`luci-app-easytier` + `easytier-noweb`（官方预编译二进制，不编译 Rust）
+- 流量统计：`luci-app-nlbwmon` + `nlbwmon`（NSS 加速会漏统计，仅作近似账本）
+- 文件共享：`luci-app-samba4` + `samba4-server`
+- 明确不装：代理类（passwall/openclash 等）、frp、ddns、acme、wol、diskman、aria2/ariang、
+  nginx、banip、arpbind、usb-printer、wechatpush、coremark、btop 等
+
+### USB3.0（硬改）
+- `kmod-usb-core`/`usb2`/`usb3`/`usb-dwc3`/`usb-dwc3-qcom`、`usb-storage` + UAS/extras
+- 文件系统：ext4 / vfat / msdos / exfat / ntfs3 / f2fs，`usbutils`、`block-mount`
+- USB 网卡：rtl8152 / asix / cdc-ether / rndis；USB 串口：option / ch341 / cp210x / pl2303 / ftdi
+
+## QoS：三态一键切换（重要）
+
+ECM 把流转交 NSS 固件后不再经过 Linux qdisc，**软件 QoS 与 NSS 硬件加速不能同时生效**。
+因此本固件提供三态互斥模式，LuCI 菜单位置：**网络 → QoS 模式**（`/usr/sbin/qos-switch`）：
+
+| 模式 | 行为 | 适用 |
+|---|---|---|
+| `off`（默认） | 停 qosify/sqm，卸载 `nss-ifb`，启动 ECM，满血 NSS 硬件加速 | 绝大多数场景 |
+| `nss` | 启动 ECM，加载 `nss-ifb` 并在 `nssifb`/WAN 上挂 `nsstbl` + `nssfq_codel` | 需要简单限速整形（实验） |
+| `qosify` | 停 ECM、卸载 `nss-ifb`，用 `qosify`（eBPF + CAKE，diffserv4）做软件整形 | 需要 IP/端口/DSCP 级精细管理 |
+
+- 硬件模式仅支持 `fq_codel`，**没有 CAKE、没有多级分类**，上游仅验证 IPQ807x，IPQ60xx 属未测试，
+  因此定位为“硬件简易 QoS（实验）”，不要承诺稳定。
+- 软件模式 `qosify` 关闭 ECM 后 NSS 不再加速，吞吐会下降到 CPU 水平，这是机制决定的取舍。
+- 页面可查看当前 `tc -s qdisc show` 状态；命令行：`qos-switch off|nss|qosify|apply|status`。
+
+## 性能 / 稳定 / 发热
+
+- `files/etc/uci-defaults/99-znm2-tuning`：关闭 `flow_offloading` / `flow_offloading_hw`（与 NSS 互斥）、
+  时区 `Asia/Shanghai`、cpufreq `schedutil`、启用 ttyd、QoS 默认 `off`
+- `files/etc/sysctl.d/99-znm2.conf`：`nf_conntrack_max=131072`、BBR、`netdev_max_backlog=4096`、
+  收发缓冲与 `fs.file-max` 适度提高
+- 不开启 packet steering / irqbalance / 软件或硬件 flow offloading
+
+## 目录结构
+
+```
+configs/IPQ60XX.config          仅 zn_m2 的设备配置（含 NSS 固件 11.4）
+configs/General.config          通用包选择（无 WiFi、NSS、USB、QoS、中文语言包）
+scripts/Roc-script.sh           feeds 前的定制脚本（主题、lucky 万吉替换、EasyTier、qos-switch、files 注入）
+packages/qos-switch/            三态 QoS 切换包（脚本 + init + LuCI + 中文 po）
+packages/lucky-wanji/           lucky 万吉 3.5.0 aarch64 官方离线包（构建时校验 sha256）
+files/                          根文件系统覆盖层（uci-defaults、sysctl）
+.github/workflows/IPQ60XX-LibWrt.yml   唯一工作流（Build-OpenWrt.yml 为公共实现）
+```
+
+## 注意事项
+
+1. 本分支只适配兆能 M2，不要用于其他 IPQ60xx 机型。
+2. 固件不带 WiFi 是刻意选择：没有 ath11k 驱动、无线固件与 hostapd，LuCI 中也不会出现无线菜单。
+3. lucky 使用万吉版二进制，升级 lucky 时请保持 `lucky_*_wanji.tar.gz` 来源，否则会退回标准版（无
+   FileBrowser/Rclone）。
+4. NSS 只加速有线转发；WireGuard、qosify 等走 CPU，属预期行为。
+5. `firewall4` 硬依赖 `kmod-nft-offload`（只是提供 netfilter flowtable 能力），固件保留该模块，但
+   `flow_offloading` / `flow_offloading_hw` 已在 `99-znm2-tuning` 中关闭，不会与 NSS 争抢转发路径。
+6. 首次刷机请使用 factory.ubi（uboot 扩容分区），升级使用 sysupgrade.bin。
