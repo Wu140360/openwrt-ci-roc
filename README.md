@@ -46,10 +46,11 @@
 
 ### 满血 NSS（仅有线）
 - ECM + 有线 NSS 子模块：`kmod-qca-nss-drv`、`kmod-qca-nss-ecm`、`-qdisc`、`-igs`、`-bridge-mgr`、
-  `-pppoe`、`-tun6rd`、`-gre`、`-l2tpv2`、`-map-t`、`-clmapmgr`、`-tunipip6`、`kmod-nss-ifb`
-- `NSS_DRV_*_ENABLE`（BRIDGE/IPV6/VIRT_IF/PPPOE/VLAN/LAG/TUN6RD/GRE/L2TP/MAPT/CLMAP/TUNIPIP6/SHAPER/IGS）
+  `-pppoe`、`-tun6rd`、`-gre`、`-l2tpv2`、`-map-t`、`-tunipip6`、`kmod-nss-ifb`
+- `NSS_DRV_*_ENABLE`（BRIDGE/IPV6/VIRT_IF/PPPOE/VLAN/LAG/TUN6RD/GRE/L2TP/MAPT/TUNIPIP6/SHAPER/IGS）
   在 nss_packages 中默认全部为 `n`，配置里已显式置 `y`，否则 ECM 等子模块会因依赖不满足被丢弃
-- `kmod-qca-nss-drv-match` 依赖 `NSS_DRV_WIFIOFFLOAD_ENABLE`（WiFi offload 分类器），无 WiFi 固件不启用
+- `kmod-qca-nss-drv-match` 依赖 `NSS_DRV_WIFIOFFLOAD_ENABLE`（WiFi offload 分类器），无 WiFi 固件不启用；
+  `kmod-qca-nss-drv-clmapmgr` 在 nss_packages 中标记 `@BROKEN`，同样不启用
 - NSS 固件版本固定 11.4；`q6_region` **保持源码默认预留**，未做任何缩减
 - 未启用 `CONFIG_FEED_nss_packages`（NSS 驱动随 LibWrt 的 nss_packages feed 参与构建）
 
