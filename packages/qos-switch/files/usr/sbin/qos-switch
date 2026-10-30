@@ -263,6 +263,8 @@ mode_qosify() {
 }
 
 show_status() {
+	# 记录实际生效模式，供 LuCI 页面显示
+	printf '%s\n' "$MODE" > /var/run/qos-switch.mode 2>/dev/null || true
 	echo "=== qos-switch: 当前模式 ${MODE} ==="
 	tc -s qdisc show 2>/dev/null || true
 	log "mode=$MODE; $(tc -s qdisc show 2>/dev/null | tr '\n' ' ' | cut -c1-400)"

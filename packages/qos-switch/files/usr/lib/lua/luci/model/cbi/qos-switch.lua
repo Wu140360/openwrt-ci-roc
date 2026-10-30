@@ -3,6 +3,7 @@
 
 local sys = require "luci.sys"
 local util = require "luci.util"
+local fs = require "nixio.fs"
 
 local m, s, o
 
@@ -43,6 +44,12 @@ m.on_after_commit = function()
 end
 
 local s2 = m:section(SimpleSection, "当前生效状态")
+
+local running = fs.readfile("/var/run/qos-switch.mode")
+running = running and running:gsub("%s+$", "") or ""
+
+local cur = s2:option(DummyValue, "_running", "当前运行模式")
+cur.value = (running ~= "" and running) or "未应用（默认 off，满血 NSS 硬件加速）"
 
 local status = s2:option(DummyValue, "_tc")
 status.rawhtml = true
