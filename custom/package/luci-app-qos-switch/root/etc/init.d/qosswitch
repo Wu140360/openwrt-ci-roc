@@ -1,0 +1,45 @@
+#!/bin/sh /etc/rc.common
+# shellcheck disable=SC2034  # START/STOP/USE_PROCD are consumed by rc.common.
+# Apply the persisted QoS mode after the network and firewall are up.
+
+START=95
+STOP=10
+USE_PROCD=1
+
+ensure_defaults() {
+	local changed=0
+
+	if ! uci -q get qosswitch.main >/dev/null 2>&1; then
+		uci -q set qosswitch.main='main'
+		changed=1
+	fi
+
+	if [ -z "$(uci -q get qosswitch.main.mode || true)" ]; then
+		uci -q set qosswitch.main.mode='off'
+		changed=1
+	fi
+	if [ -z "$(uci -q get qosswitch.main.wan_dev || true)" ]; then
+		uci -q set qosswitch.main.wan_dev='auto'
+		changed=1
+	fi
+	if [ -z "$(uci -q get qosswitch.main.soft_engine || true)" ]; then
+		uci -q set qosswitch.main.soft_engine='sqm'
+		changed=1
+	fi
+
+	[ "$changed" -eq 0 ] || uci -q commit qosswitch
+}
+
+start_service() {
+	ensure_defaults
+	/usr/sbin/qos-switch apply
+}
+
+reload_service() {
+	ensure_defaults
+	/usr/sbin/qos-switch apply
+}
+
+stop_service() {
+	/usr/sbin/qos-switch stop
+}

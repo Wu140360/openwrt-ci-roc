@@ -1,0 +1,33 @@
+name: ZN-M2-LibWrt
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  Build:
+    uses: ./.github/workflows/Build-OpenWrt.yml
+    permissions:
+      contents: write
+      actions: write
+    with:
+      repo_url: https://github.com/laipeng668/openwrt-6.x.git
+      repo_branch: 25.12-nss
+      config_file: configs/ZN-M2.config
+      firmware_tag: ZN-M2
+      kernel_file: kernel-6.12
+      artifact_prefix: ZN-M2
+      manifest_file: libwrt-qualcommax-ipq60xx.manifest
+      package_extension: apk
+      release_summary: >-
+        ZN M2 (IPQ6000) dedicated build: LibWrt 25.12 stable branch, Linux 6.12,
+        apk package manager, 512MB RAM profile, USB3.0 storage, no WiFi drivers
+        or firmware. Full wired NSS offload with ECM, crypto, NSS qdisc, ingress
+        shaping, bridge/VLAN/PPPoE managers. Aurora theme, Simplified Chinese
+        LuCI, lucky wanji, SmartDNS, UPnP, WireGuard, KMS, ttyd and nlbwmon are
+        included. The custom QoS page switches between NSS hardware shaping,
+        software Cake/eqos (ECM stopped) and QoS off (ECM restored).

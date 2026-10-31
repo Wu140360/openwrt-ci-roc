@@ -1,0 +1,13 @@
+{
+	"admin/network/qos-switch": {
+		"title": "QoS Mode Switch",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "qos-switch"
+		},
+		"depends": {
+			"acl": [ "luci-app-qos-switch" ]
+		}
+	}
+}

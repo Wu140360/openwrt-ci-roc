@@ -1,57 +1,87 @@
-<div align="center">
-<h1>OpenWrt — 云编译</h1>
+# 兆能 M2（ZN M2）OpenWrt 25.12 定制固件
 
-## 特别提示
+面向家庭主路由的 **ZN M2 / 兆能 M2** 专用云编译仓库。设备为 IPQ6000，已硬改 **512MB 内存 + USB3.0**，并使用暗云 u-boot 扩容分区。
 
-- **本人不对任何人因使用本固件所遭受的任何理论或实际的损失承担责任！**
+- 源码：`laipeng668/LibWrt`，分支 **`25.12-nss`**，Linux **6.12**
+- 包管理：**apk**（OpenWrt 25.12）
+- 设备 profile：仅 `qualcommax/ipq60xx` 的 **`zn_m2`**
+- 默认地址：**`192.168.2.1`**，主机名 **`ZN-M2`**，默认无密码
+- **无 WiFi**：不编译 ath11k 驱动/固件、hostapd/wpad，也不改 DTS 的 WiFi 节点
+- **不改 q6_region**：保持 `ipq6018-512m.dtsi` 的 55MB（`0x3700000`），Roc-script 中 4 行缩容 sed 始终注释
 
-- **本固件禁止用于任何商业用途，请务必严格遵守国家互联网使用相关法律规定！**
+## 一键云编译
 
-## 项目说明
-- 默认管理地址：**`192.168.2.1`**，默认用户：**`root`**，默认密码：**`none`**
-- [云编译来源](https://github.com/haiibo/OpenWrt) [视频教程](https://www.youtube.com/watch?v=6j4ofS0GT38) [问题合集](https://github.com/LiBwrt/openwrt-6.x/issues)
+在 GitHub 仓库的 **Actions → ZN-M2-LibWrt → Run workflow** 运行，分支选择 `3`。
 
-## 仓库说明
-- 本人 fork 的仓库：[ImmortalWrt](https://github.com/laipeng668/immortalwrt) [LibWrt](https://github.com/laipeng668/openwrt-6.x)，内容大体一致。
-- `ImmortalWrt` 和 `LibWrt` 分别通过 rebase 和 merge 进行更新，相互印证。
-- `LibWrt` 因为 DTS 更为丰富，所以支持更多的机型。
+工作流会调用 `.github/workflows/Build-OpenWrt.yml`，执行 `scripts/Roc-script.sh`、`make download`、`make -j$(nproc)`，最后上传 Artifact 并发布 `ZN-M2` Release。固件文件通常形如：
 
-## 定制固件
-- 首先要登录 Github 账号，然后 fork 此项目到你自己的 Github 仓库。
-- 修改 `configs` 目录对应的文件添加或删除插件，或者上传自己的 `xx.config` 配置文件。
-- 不需要的软件包请把 `y` 改成 `n` ，仅在前面添加 `#` 是无效的。
-- 插件对应名称及功能请参考恩山网友帖子：[OpenWrt软件包全量解释](https://www.right.com.cn/FORUM/forum.php?mod=viewthread&tid=8384897)。
-- 如需修改默认 IP、添加或删除插件包以及一些其他设置请在 `scripts/Roc-script.sh` 文件内修改。
-- 固件构建只会拉取设备配置和 `configs/General.config` 中实际启用的第三方软件包，并始终使用对应分支的最新提交。
-- 每次固件构建都会记录第三方仓库的实际分支和 commit，并在 Release 中附带 `<固件前缀>.third-party-sources.txt` 供核对；该记录文件不会写入固件。
-- 添加或修改 `xx.yml` 文件，最后点击 `Actions` 运行要编译的 `workflow` 即可开始编译。
-- 编译大概需要 1-2 小时，编译完成后在仓库主页 [Releases](https://github.com/laipeng668/openwrt-ci-roc/releases) 对应 Tag 标签内下载固件。
+```text
+libwrt-qualcommax-ipq60xx-zn_m2-squashfs-sysupgrade.bin
+```
 
-## 单独编译软件包
-- 点击 `Actions` 运行 `Build-Packages`，`sdk_version` 可选择 `ALL` 同时编译全部版本，或选择 `main` 主线 snapshots、`23.05`、`24.10`、`25.12` 系列的最新稳定版 SDK。
-- 默认同时编译 `x86-64` 和 `aarch64` 两个架构：`x86/64` 使用 `configs/x86-64.config + configs/Packages.config`；`aarch64` 在 `main`、`25.12` 使用 `configs/JDCloud.config + configs/Packages.config`，在 `23.05`、`24.10` 使用 SDK 脚本内置的 rax3000m 配置 + `configs/Packages.config`。
-- `package` 默认是 `ALL`，下拉只保留独立软件包 `nginx`，以及 `luci-app-aria2`、`luci-app-frpc`、`luci-app-frps`、`luci-app-gecoosac`、`luci-app-lucky`、`luci-app-openlist2`、`luci-theme-argon`、`luci-theme-aurora` 这些 LuCI 入口；选择 LuCI 软件包时会同时编译并发布对应基础包或主题配置插件，其中 `luci-app-aria2` 会一并处理 `aria2` 和 `ariang`。旧的 `aria2`、`ariang`、`frp`、`gecoosac`、`lucky`、`openlist2` 输入仅作为兼容别名保留。
-- 脚本会按每个矩阵的版本和架构从 `https://downloads.openwrt.org/` 自动查找对应 SDK，先验证官方签名和 SHA-256，再在本次构建中使用同一组精确 URL 与哈希，避免 snapshots 更新造成前后不一致。
-- SDK 签名信任锚来自 OpenWrt 官方 [`openwrt/keyring`](https://github.com/openwrt/keyring) 密钥仓库的构建公钥，仓库内固定主指纹为 `8A8BC12F46B836C0F9CDB36F1D53D1877742E911`；未知签名会直接终止构建，官方换钥时需人工核对后更新公钥。
-- `Build-Packages` 不使用 GitHub Actions 持久缓存；SDK 每次构建都会重新下载并验证签名和 SHA-256，软件包源码也会重新拉取。
-- 实际编译的软件包会参考 `configs/Packages.config` 里的软件包选项，例如 `aria2`、`ariang`、`frpc`、`frps`、`nginx-full`、`lucky`、`luci-app-gecoosac`、`luci-app-argon-config`、`luci-app-aurora-config`、`luci-app-lucky`、`luci-app-openlist2`、`luci-theme-argon` 和 `luci-theme-aurora`。
-- 编译的软件包来源及跟踪分支如下；每次构建都会拉取对应分支的最新提交，并把实际 commit 写入 `BUILDINFO.json`，不会固定第三方源码版本：
-  - `https://github.com/laipeng668/packages` 的 `aria2` 分支：`net/aria2`
-  - `https://github.com/laipeng668/packages` 的 `ariang` 分支：`net/ariang`
-  - `https://github.com/laipeng668/packages` 的 `frp-binary` 分支：`net/frp`
-  - `https://github.com/laipeng668/packages` 的 `nginx` 分支：`net/nginx`
-  - `https://github.com/laipeng668/luci` 的 `frp` 分支：`applications/luci-app-frpc`、`applications/luci-app-frps`
-  - `https://github.com/laipeng668/luci-app-gecoosac` 的 `main` 分支：`gecoosac`、`luci-app-gecoosac`
-  - `https://github.com/gdy666/luci-app-lucky` 的 `main` 分支：`lucky`、`luci-app-lucky`
-  - `https://github.com/laipeng668/luci-app-openlist2` 的 `main` 分支：`openlist2`、`luci-app-openlist2`
-  - `https://github.com/jerrykuku/luci-theme-argon` 的 `master` 分支：`luci-theme-argon`
-  - `https://github.com/jerrykuku/luci-app-argon-config` 的 `master` 分支：`luci-app-argon-config`
-  - `https://github.com/eamonxg/luci-theme-aurora` 的 `master` 分支：`luci-theme-aurora`
-  - `https://github.com/eamonxg/luci-app-aurora-config` 的 `master` 分支：`luci-app-aurora-config`
-- 编译产物会按 `<SDK>-<软件包>-<架构>.zip` 分组打包，上传到本次 workflow 的 `Artifacts`，并发布到 `Packages` 这个 [Releases](https://github.com/laipeng668/openwrt-ci-roc/releases/tag/Packages)；普通分组内的 `.apk/.ipk` 文件也使用对应架构后缀。`luci-theme-argon` 和 `luci-theme-aurora` 是通用主题包，使用 `all` 架构后缀，`arch=ALL` 时各自只保留一份。下载后先解压，`apk` 使用 `apk add --allow-untrusted *.apk` 安装，`ipk` 使用 `opkg install *.ipk` 安装。
-- 编译矩阵中部分任务失败时，工作流仍会把其他成功任务的产物发布到 `Packages` Release；如果没有任何成功产物，则跳过 Release 上传。用户主动取消工作流时不会继续发布。
-- 单个矩阵内的软件包会独立记录编译结果；部分软件包失败时，已成功的软件包仍会打包上传，同时该矩阵任务保持失败状态。每个 ZIP 内包含 `BUILDINFO.json` 和 `SHA256SUMS`，用于核对 SDK、源码版本、编译结果和文件哈希。
+请以 Release/Artifact 中实际文件名为准。
 
-## 页面预览
-![Homepage](Homepage.png)
-</div>
+## 刷机提示
+
+1. 本固件假设已经刷好暗云 u-boot、扩容分区，并按 ZN M2 的 NAND 布局启动；不要使用其它机型或未扩容机器的镜像。
+2. 首次从原厂/其它固件切换时，优先在 u-boot Web 恢复界面刷入 **sysupgrade** 镜像；不要刷写 u-boot 本身。
+3. 保留 u-boot 环境变量和 MAC/校准分区。仓库不改 DTS、不改分区表、不改 q6_region。
+4. 设备没有 WiFi 驱动，这是有意为之；请通过 LAN 口或已配置的 WAN 访问 LuCI。
+5. 若从旧固件保留配置升级，建议先备份 `/etc/config`，升级后核对 WAN/LAN、防火墙和 QoS 模式。
+
+## 功能与插件
+
+| 类别 | 内容 |
+|---|---|
+| 主题 / 语言 | Aurora 主题 + Aurora 配置、简体中文 LuCI、各插件 `zh-cn` 翻译 |
+| 满血 NSS（无 WiFi） | NSS drv、ECM、crypto、qdisc、IGS ingress、bridge/VLAN/PPPoE manager、nss-ifb、nssinfo |
+| QoS | `sqm-scripts`、`sqm-scripts-nss`、`luci-app-sqm`、`luci-app-eqos`、自建 `luci-app-qos-switch` |
+| USB | USB2/USB3、DWC3、UAS、ext4/vfat/exfat/ntfs3、block-mount、usbutils、lsblk、blkid、e2fsprogs、hd-idle |
+| 网络 | PPPoE、DHCPv6/odhcpd、WireGuard、UPnP（miniupnpd nftables）、SmartDNS、lucky 万吉 |
+| 系统/工具 | zram-swap(lz4)、ttyd、nlbwmon、KMS(vlmcsd)、watchcat、diskman、cpufreq、uhttpd、package-manager、tcpdump/iperf3/mtr/htop/btop/tmux/nano-full 等 |
+
+**lucky 使用万吉版**：`lucky/Makefile` 的 `PKG_SOURCE` 通过 `$(PKG_VERSION)` 和 `$(LUCKY_ARCH)` 生成 `_wanji.tar.gz` 文件名，不写死版本；仓库内 `custom/lucky/` 若存在与 Makefile 同版本的本地包，会复制到 `dl/` 优先使用。万吉版已包含 DDNS、ACME、WOL、FTP/WebDAV 等能力，因此固件不再安装 ddns/acme/wol/samba4。
+
+## QoS 三档一键切换
+
+LuCI 菜单：**网络 → QoS 一键切换**。
+
+| 模式 | 行为 | ECM |
+|---|---|---|
+| 关闭 | 停止 SQM/eqos，清理 qdisc | 恢复并保持开启 |
+| 硬件简易 QoS | 使用 `sqm-scripts-nss` 的 `nss-zk.qos`，接口为逻辑 `wan`，上下行速率取页面值 | 保持开启 |
+| 软件多功能 QoS | 选择 SQM+Cake 或 eqos（按 IP/MAC） | **先停止 ECM**，否则硬件加速会绕过 CPU 整形 |
+
+说明：
+
+- 当前 feed 的 `sqm-scripts-nss` 实际安装的是 **`nss-zk.qos`**（不是旧资料中的 `nss-rk.qos`）；切换脚本会优先使用 `nss-zk.qos`，并兼容旧文件名。
+- 软件模式切换到硬件/关闭模式时会执行 `/etc/init.d/qca-nss-ecm start` 并重新 `enable`；切到软件模式时执行 `stop` + `disable`。这是依据 `qca-nss-ecm` 包的 init 脚本行为实现的。
+- 带宽单位在 UCI/页面中为 **kbit/s**；eqos 内部会换算为 Mbit/s。
+- `wan_dev=auto` 时从 `network.wan` 解析物理设备，仅用于状态展示和 tc 查询；SQM 实例使用逻辑接口 `wan`，兼容 PPPoE。
+- 详细 SQM/eqos 参数可从切换页下方的按钮进入原插件页面配置。切换页会覆盖自己创建的 `sqm.qosswitch` 实例的速率、脚本和 qdisc 字段。
+
+## 目录结构
+
+```text
+.github/workflows/Build-OpenWrt.yml   # 通用构建流程（保留）
+.github/workflows/ZN-M2-LibWrt.yml    # ZN M2 入口
+configs/ZN-M2.config                 # 仅 zn_m2，无 WiFi
+configs/General.config               # NSS、QoS、USB、插件、简体中文
+scripts/Roc-script.sh                # 配置注入、上游包拉取、lucky 万吉、自建包/rootfs
+custom/package/luci-app-qos-switch/  # 自建 QoS 切换 LuCI 应用
+custom/files/                        # rootfs 注入：sysctl、uci-defaults
+custom/lucky/                        # （可选）本地 lucky 万吉包
+```
+
+## 运行时验证提示
+
+以下项目依赖实机/完整编译环境，仓库只能做静态校验：
+
+- `qca-nss-ecm` 的启停命令已经按 `nss-packages` 的 `qca-nss-ecm.init` 实现，但实际模块加载、debugfs 和 NSS 固件版本仍需在 M2 上确认。
+- `nss-zk.qos` 的 ingress 使用 `ifb@wan`（不是 `nssifb`），状态页同时检查两者。
+- 软件 Cake 模式关闭 ECM 后，请用 `tc -s qdisc show dev wan`、`nssinfo`/`nss_stats` 和实际限速测试确认没有硬件旁路。
+- 首次启动后建议在 ttyd 运行 `qos-switch status`、`logread -e qos-switch`、`nss_stats` 检查。
+
+## 上游与许可
+
+构建脚本和配置基于 [laipeng668/openwrt-ci-roc](https://github.com/laipeng668/openwrt-ci-roc) 与 [laipeng668/LibWrt](https://github.com/laipeng668/LibWrt) 整理；NSS 包来自 `laipeng668/nss-packages`，SQM NSS 脚本来自 `qosmio/sqm-scripts-nss`，lucky 来自 `gdy666/luci-app-lucky`，Aurora 来自 `eamonxg`。本仓库保留上游 MIT 许可证，新增脚本按 MIT 发布。

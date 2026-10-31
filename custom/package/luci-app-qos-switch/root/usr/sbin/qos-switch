@@ -1,0 +1,435 @@
+#!/bin/sh
+# shellcheck disable=SC1091
+# /usr/sbin/qos-switch - apply the selected QoS mode.
+#
+# Modes:
+#   off  - remove QoS, keep/restore NSS ECM acceleration
+#   nss  - sqm-scripts-nss (nss-zk.qos if shipped by the feed), ECM stays on
+#   soft - Cake via SQM or eqos, ECM is stopped so CPU shaping is effective
+#
+# This script is intentionally POSIX sh (BusyBox ash on OpenWrt).
+
+set -u
+
+. /lib/functions.sh
+. /lib/functions/network.sh
+
+CONFIG=qosswitch
+SQM_IFACE=wan
+WAN_DEVICE=""
+DOWNLOAD_KBPS=0
+UPLOAD_KBPS=0
+
+log() {
+	logger -t qos-switch "$*" 2>/dev/null || true
+}
+
+info() {
+	printf '%s\n' "$*"
+}
+
+die() {
+	printf '错误: %s\n' "$*" >&2
+	log "error: $*"
+	exit 1
+}
+
+get_opt() {
+	uci -q get "$CONFIG.main.$1" || true
+}
+
+is_uint() {
+	case "$1" in
+	'' | *[!0-9]*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+ensure_main() {
+	local changed=0
+
+	if ! uci -q get "$CONFIG.main" >/dev/null 2>&1; then
+		uci -q set "$CONFIG.main=main"
+		changed=1
+	fi
+
+	if [ -z "$(get_opt mode)" ]; then
+		uci -q set "$CONFIG.main.mode=off"
+		changed=1
+	fi
+	if [ -z "$(get_opt wan_dev)" ]; then
+		uci -q set "$CONFIG.main.wan_dev=auto"
+		changed=1
+	fi
+	if [ -z "$(get_opt soft_engine)" ]; then
+		uci -q set "$CONFIG.main.soft_engine=sqm"
+		changed=1
+	fi
+
+	[ "$changed" -eq 0 ] || uci -q commit "$CONFIG"
+}
+
+resolve_wan() {
+	local configured device
+
+	configured="$(get_opt wan_dev)"
+	[ -n "$configured" ] || configured=auto
+
+	device=""
+	if [ "$configured" = auto ]; then
+		network_get_device device wan 2>/dev/null || true
+		if [ -z "$device" ]; then
+			device="$(uci -q get network.wan.device || true)"
+		fi
+	else
+		device="$configured"
+	fi
+	if [ -z "$device" ] || [ ! -e "/sys/class/net/$device" ]; then
+		device="$(ip -4 route show default 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+	fi
+
+	WAN_DEVICE="$device"
+}
+
+find_nss_script() {
+	if [ -f /usr/lib/sqm/nss-zk.qos ]; then
+		NSS_SCRIPT=nss-zk.qos
+	elif [ -f /usr/lib/sqm/nss-rk.qos ]; then
+		# Older sqm-scripts-nss releases used this file name.
+		NSS_SCRIPT=nss-rk.qos
+	else
+		die "未找到 nss-zk.qos / nss-rk.qos，请确认 sqm-scripts-nss 已安装"
+	fi
+}
+
+run_init() {
+	local name="$1"
+	local action="$2"
+
+	if [ ! -x "/etc/init.d/$name" ]; then
+		log "missing init script: /etc/init.d/$name"
+		return 1
+	fi
+	if "/etc/init.d/$name" "$action" >/dev/null 2>&1; then
+		return 0
+	fi
+	log "init action failed: $name $action"
+	return 1
+}
+
+run_init_required() {
+	if ! run_init "$1" "$2"; then
+		die "$1 $2 失败，请检查系统日志"
+	fi
+}
+
+ecm_running() {
+	[ -d /sys/module/ecm ]
+}
+
+mount_debugfs() {
+	if [ -d /sys/kernel/debug ] && ! grep -q ' /sys/kernel/debug ' /proc/mounts 2>/dev/null; then
+		mount -t debugfs none /sys/kernel/debug 2>/dev/null || true
+	fi
+}
+
+apply_conntrack_tuning() {
+	# Re-assert after firewall/ECM have loaded nf_conntrack. The 99-zn-m2
+	# sysctl file may be parsed before the module exists.
+	[ -w /proc/sys/net/netfilter/nf_conntrack_max ] &&
+		echo 65536 >/proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || true
+	[ -w /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established ] &&
+		echo 3600 >/proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established 2>/dev/null || true
+}
+
+start_ecm() {
+	mount_debugfs
+	run_init qca-nss-ecm enable || true
+	if ecm_running; then
+		return 0
+	fi
+	if ! run_init qca-nss-ecm start; then
+		log "warning: qca-nss-ecm start failed"
+		return 1
+	fi
+	sleep 1
+	if ! ecm_running; then
+		log "warning: ecm module is not loaded after start"
+		return 1
+	fi
+	return 0
+}
+
+stop_ecm() {
+	run_init qca-nss-ecm stop || true
+	run_init qca-nss-ecm disable || true
+
+	if ecm_running; then
+		log "error: ecm module is still loaded"
+		return 1
+	fi
+	return 0
+}
+
+cleanup_qdiscs() {
+	local dev
+
+	command -v tc >/dev/null 2>&1 || return 0
+
+	for dev in "$WAN_DEVICE" "$SQM_IFACE" nssifb "ifb@$SQM_IFACE"; do
+		[ -n "$dev" ] || continue
+		[ -d "/sys/class/net/$dev" ] || continue
+		tc qdisc del dev "$dev" root 2>/dev/null || true
+		tc qdisc del dev "$dev" ingress 2>/dev/null || true
+	done
+
+	# Best-effort fallback if SQM was already stopped/disabled and left its
+	# private ifb link behind. Kernel 6.12 handles this safely.
+	if [ -d "/sys/class/net/ifb@$SQM_IFACE" ]; then
+		ip link set "ifb@$SQM_IFACE" down 2>/dev/null || true
+		ip link del "ifb@$SQM_IFACE" 2>/dev/null || true
+	fi
+}
+
+configure_sqm() {
+	local enabled="$1"
+	local script="$2"
+	local qdisc="$3"
+
+	uci -q set "sqm.qosswitch=queue"
+	uci -q set "sqm.qosswitch.enabled=$enabled"
+	uci -q set "sqm.qosswitch.interface=$SQM_IFACE"
+	uci -q set "sqm.qosswitch.download=$DOWNLOAD_KBPS"
+	uci -q set "sqm.qosswitch.upload=$UPLOAD_KBPS"
+	uci -q set "sqm.qosswitch.script=$script"
+	uci -q set "sqm.qosswitch.qdisc=$qdisc"
+	uci -q set "sqm.qosswitch.linklayer=none"
+	uci -q set "sqm.qosswitch.debug_logging=0"
+	uci -q set "sqm.qosswitch.verbosity=5"
+	uci -q commit sqm
+}
+
+disable_sqm() {
+	# Stop while the section is still enabled so SQM runs its own teardown
+	# (this removes ifb@wan and the NSS qdisc modules cleanly).
+	run_init sqm stop || true
+	uci -q set "sqm.qosswitch.enabled=0"
+	uci -q commit sqm
+}
+
+start_sqm() {
+	run_init sqm enable || true
+	run_init_required sqm restart
+}
+
+configure_eqos() {
+	local download_mbit upload_mbit
+
+	# eqos works in Mbit/s while qosswitch stores kbit/s.
+	download_mbit=$(((DOWNLOAD_KBPS + 999) / 1000))
+	upload_mbit=$(((UPLOAD_KBPS + 999) / 1000))
+	[ "$download_mbit" -gt 0 ] || download_mbit=1
+	[ "$upload_mbit" -gt 0 ] || upload_mbit=1
+
+	uci -q set "eqos.config=eqos"
+	uci -q set "eqos.config.enabled=1"
+	uci -q set "eqos.config.download=$download_mbit"
+	uci -q set "eqos.config.upload=$upload_mbit"
+	uci -q commit eqos
+}
+
+start_eqos() {
+	run_init eqos enable || true
+	run_init_required eqos restart
+}
+
+stop_eqos() {
+	uci -q set "eqos.config.enabled=0"
+	uci -q commit eqos
+	run_init eqos stop || true
+}
+
+apply_off() {
+	disable_sqm
+	stop_eqos
+	cleanup_qdiscs
+	start_ecm || log "warning: ECM could not be restored"
+}
+
+apply_nss() {
+	find_nss_script
+	run_init sqm stop || true
+	stop_eqos
+	cleanup_qdiscs
+	start_ecm || log "warning: NSS QoS will run but ECM is not currently loaded"
+
+	configure_sqm 1 "$NSS_SCRIPT" fq_codel
+	start_sqm
+}
+
+apply_soft_sqm() {
+	[ -f /usr/lib/sqm/piece_of_cake.qos ] || die "未找到 piece_of_cake.qos，请确认 sqm-scripts 已安装"
+
+	configure_sqm 1 piece_of_cake.qos cake
+	start_sqm
+}
+
+apply_soft_eqos() {
+	[ -x /etc/init.d/eqos ] || die "未找到 eqos 服务"
+	configure_eqos
+	start_eqos
+}
+
+apply_soft() {
+	disable_sqm
+	stop_eqos
+	cleanup_qdiscs
+
+	if ! stop_ecm; then
+		die "ECM 未能停止，软件 QoS 可能被硬件加速绕过"
+	fi
+
+	case "$(get_opt soft_engine)" in
+	eqos) apply_soft_eqos ;;
+	sqm | '') apply_soft_sqm ;;
+	*) die "未知 soft_engine: $(get_opt soft_engine)" ;;
+	esac
+}
+
+show_qdisc() {
+	local dev="$1"
+
+	[ -n "$dev" ] || return 0
+	[ -d "/sys/class/net/$dev" ] || return 0
+	command -v tc >/dev/null 2>&1 || return 0
+
+	info "qdisc ($dev):"
+	tc -s qdisc show dev "$dev" 2>&1 | sed 's/^/  /'
+}
+
+print_status() {
+	local mode sqm_enabled sqm_script eqos_enabled ifb_dev
+
+	mode="$(get_opt mode)"
+	[ -n "$mode" ] || mode=off
+	resolve_wan
+
+	info "模式: $mode"
+	info "WAN 设备: ${WAN_DEVICE:-未知} (SQM 逻辑接口: $SQM_IFACE)"
+
+	if ecm_running; then
+		info "ECM 硬件加速: 运行中"
+	else
+		info "ECM 硬件加速: 未加载"
+	fi
+
+	sqm_enabled="$(uci -q get sqm.qosswitch.enabled || true)"
+	sqm_script="$(uci -q get sqm.qosswitch.script || true)"
+	info "SQM: ${sqm_enabled:-未配置} ${sqm_script:+($sqm_script)}"
+
+	eqos_enabled="$(uci -q get eqos.config.enabled || true)"
+	info "eqos: ${eqos_enabled:-未配置}"
+
+	ifb_dev="ifb@$SQM_IFACE"
+	if [ -d "/sys/class/net/$ifb_dev" ]; then
+		info "NSS ifb: $ifb_dev 存在"
+	elif [ -d /sys/class/net/nssifb ]; then
+		info "NSS ifb: nssifb 存在"
+	else
+		info "NSS ifb: 未创建"
+	fi
+
+	show_qdisc "$WAN_DEVICE"
+	show_qdisc "$ifb_dev"
+	show_qdisc nssifb
+
+	if command -v nssinfo >/dev/null 2>&1; then
+		info "nssinfo: 已安装（交互式查看请通过 ttyd 运行 nssinfo）"
+	else
+		info "nssinfo: 未安装"
+	fi
+	if command -v nss_stats >/dev/null 2>&1; then
+		info "NSS 统计: nss_stats 可用"
+	fi
+}
+
+apply_mode() {
+	local mode engine
+
+	ensure_main
+	mode="$(get_opt mode)"
+	[ -n "$mode" ] || mode=off
+
+	DOWNLOAD_KBPS="$(get_opt download)"
+	UPLOAD_KBPS="$(get_opt upload)"
+	[ -n "$DOWNLOAD_KBPS" ] || DOWNLOAD_KBPS=0
+	[ -n "$UPLOAD_KBPS" ] || UPLOAD_KBPS=0
+	DOWNLOAD_KBPS="$(printf '%s' "$DOWNLOAD_KBPS" | sed 's/^0*//')"
+	UPLOAD_KBPS="$(printf '%s' "$UPLOAD_KBPS" | sed 's/^0*//')"
+	[ -n "$DOWNLOAD_KBPS" ] || DOWNLOAD_KBPS=0
+	[ -n "$UPLOAD_KBPS" ] || UPLOAD_KBPS=0
+	if [ "$mode" != off ]; then
+		is_uint "$DOWNLOAD_KBPS" || die "下行带宽必须是非负整数（kbit/s）"
+		is_uint "$UPLOAD_KBPS" || die "上行带宽必须是非负整数（kbit/s）"
+	fi
+
+	engine="$(get_opt soft_engine)"
+	[ -n "$engine" ] || engine=sqm
+
+	resolve_wan
+
+	case "$mode" in
+	off)
+		info "正在关闭 QoS 并恢复 ECM 加速..."
+		apply_off
+		;;
+	nss)
+		[ "$DOWNLOAD_KBPS" -gt 0 ] || [ "$UPLOAD_KBPS" -gt 0 ] ||
+			die "NSS 模式至少需要一个非零的上下行带宽（kbit/s）"
+		info "正在启用 NSS 硬件 QoS（ECM 保持开启）..."
+		apply_nss
+		;;
+	soft)
+		if [ "$engine" = eqos ]; then
+			[ "$DOWNLOAD_KBPS" -gt 0 ] && [ "$UPLOAD_KBPS" -gt 0 ] ||
+				die "eqos 模式需要同时填写上行和下行带宽（kbit/s）"
+		else
+			[ "$DOWNLOAD_KBPS" -gt 0 ] || [ "$UPLOAD_KBPS" -gt 0 ] ||
+				die "软件 SQM 模式至少需要一个非零的上下行带宽（kbit/s）"
+		fi
+		info "正在启用软件 QoS（$engine），并停止 ECM 硬件加速..."
+		apply_soft
+		;;
+	*)
+		die "未知 mode: $mode（有效值: off / nss / soft）"
+		;;
+	esac
+
+	apply_conntrack_tuning
+	print_status
+}
+
+stop_all() {
+	resolve_wan
+	run_init sqm stop || true
+	run_init eqos stop || true
+	cleanup_qdiscs
+}
+
+case "${1:-apply}" in
+apply)
+	apply_mode
+	;;
+status)
+	ensure_main
+	resolve_wan
+	print_status
+	;;
+stop)
+	stop_all
+	;;
+*)
+	printf '用法: %s {apply|status|stop}\n' "$0" >&2
+	exit 1
+	;;
+esac

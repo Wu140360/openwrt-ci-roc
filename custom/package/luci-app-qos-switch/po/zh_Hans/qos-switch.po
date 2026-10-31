@@ -1,0 +1,100 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: luci-app-qos-switch\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-10-31 12:00+0800\n"
+"PO-Revision-Date: 2026-10-31 12:00+0800\n"
+"Last-Translator: Wu140360\n"
+"Language-Team: Chinese (Simplified)\n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "QoS Mode Switch"
+msgstr "QoS 一键切换"
+
+msgid "Switch between NSS hardware shaping, software shaping and no QoS. Software mode stops ECM hardware offload so the CPU shaper actually sees the packets."
+msgstr "在 NSS 硬件整形、软件整形和关闭 QoS 之间切换。软件模式会先停止 ECM 硬件加速，确保 CPU 整形真正生效。"
+
+msgid "Operating mode"
+msgstr "工作模式"
+
+msgid "Mode"
+msgstr "模式"
+
+msgid "Off — no QoS, ECM hardware acceleration enabled"
+msgstr "关闭 — 不启用 QoS，保持 ECM 硬件加速"
+
+msgid "Hardware QoS — NSS shaper, ECM enabled (recommended)"
+msgstr "硬件简易 QoS — NSS 整形，保持 ECM 开启（推荐）"
+
+msgid "Software QoS — ECM stopped, CPU shaping"
+msgstr "软件多功能 QoS — 停止 ECM，由 CPU 整形"
+
+msgid "WAN device"
+msgstr "WAN 设备"
+
+msgid "auto resolves the physical device from network.wan; an explicit name is mainly used for status output."
+msgstr "auto 会从 network.wan 解析物理设备；手动填写主要用于状态显示。"
+
+msgid "Download bandwidth (kbit/s)"
+msgstr "下行带宽（kbit/s）"
+
+msgid "0 or empty disables shaping in that direction. Both values are required for eqos."
+msgstr "填 0 或留空表示不限制该方向；eqos 模式必须同时填写上下行。"
+
+msgid "Upload bandwidth (kbit/s)"
+msgstr "上行带宽（kbit/s）"
+
+msgid "Software engine"
+msgstr "软件模式引擎"
+
+msgid "SQM + Cake — best general purpose shaper"
+msgstr "SQM + Cake — 通用整形，功能最全"
+
+msgid "eqos — per-IP/MAC limits on the LAN"
+msgstr "eqos — 按 IP/MAC 限制局域网设备"
+
+msgid "NSS mode uses the nss-zk.qos script from sqm-scripts-nss. Software mode stops qca-nss-ecm first; returning to Off or NSS restores it. The detailed SQM and eqos settings remain available through the buttons below."
+msgstr "NSS 模式使用 sqm-scripts-nss 提供的 nss-zk.qos。软件模式会先停止 qca-nss-ecm，切回关闭或 NSS 模式时自动恢复。详细 SQM 与 eqos 参数可通过下方按钮进入配置。"
+
+msgid "Current status"
+msgstr "当前状态"
+
+msgid "Open SQM settings"
+msgstr "打开 SQM 详细设置"
+
+msgid "Open eqos settings"
+msgstr "打开 eqos 详细设置"
+
+msgid "Refresh"
+msgstr "刷新"
+
+msgid "Refresh page"
+msgstr "刷新页面"
+
+msgid "Close"
+msgstr "关闭"
+
+msgid "Status unavailable"
+msgstr "无法获取状态"
+
+msgid "QoS mode applied"
+msgstr "QoS 模式已应用"
+
+msgid "The selected mode was applied. Current status:"
+msgstr "所选模式已应用，当前状态如下："
+
+msgid "No status output."
+msgstr "没有状态输出。"
+
+msgid "Apply failed"
+msgstr "应用失败"
+
+msgid "The mode could not be applied. Check the error below and the system log."
+msgstr "模式应用失败，请检查下方错误信息和系统日志。"
+
+msgid "The QoS service returned an error."
+msgstr "QoS 服务返回错误。"

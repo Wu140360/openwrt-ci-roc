@@ -1,0 +1,91 @@
+#!/bin/sh
+# First-boot defaults for the ZN M2 image. Every setting is guarded so a
+# user-provided value is never overwritten after an upgrade.
+
+if [ -f /etc/config/system ]; then
+	# Mark the Chinese defaults as initialised before the later 99-* scripts
+	# run; otherwise default-settings would reset LuCI to language "auto".
+	if ! uci -q get system.@imm_init[0] >/dev/null 2>&1; then
+		uci -q add system imm_init >/dev/null
+	fi
+	uci -q set system.@imm_init[0].lang='1'
+
+	# Simplified Chinese UI and Asia/Shanghai time zone.
+	lang="$(uci -q get luci.main.lang || true)"
+	case "$lang" in
+	'' | auto)
+		uci -q set luci.main.lang='zh_cn'
+		;;
+	esac
+	tz="$(uci -q get system.@system[0].timezone || true)"
+	if [ -z "$tz" ]; then
+		uci -q set system.@system[0].timezone='CST-8'
+		uci -q set system.@system[0].zonename='Asia/Shanghai'
+	fi
+
+	# 128MB zram backed by lz4; enough headroom without starving the page cache.
+	if [ -z "$(uci -q get system.@system[0].zram_size_mb || true)" ]; then
+		uci -q set system.@system[0].zram_size_mb='128'
+		uci -q set system.@system[0].zram_comp_algo='lz4'
+		uci -q set system.@system[0].zram_priority='100'
+	fi
+	uci -q commit system || true
+fi
+
+if [ -f /etc/config/luci ]; then
+	theme="$(uci -q get luci.main.mediaurlbase || true)"
+	case "$theme" in
+	'' | /luci-static/bootstrap)
+		uci -q set luci.main.mediaurlbase='/luci-static/aurora'
+		;;
+	esac
+	uci -q commit luci || true
+fi
+
+# ttyd: LAN-only web terminal, enabled on boot. '@lan' is resolved by the
+# ttyd init script to the actual br-lan device.
+if [ -f /etc/config/ttyd ]; then
+	if uci -q get ttyd.@ttyd[0] >/dev/null 2>&1; then
+		uci -q set ttyd.@ttyd[0].enable='1'
+		uci -q set ttyd.@ttyd[0].interface='@lan'
+		uci -q set ttyd.@ttyd[0].port='7681'
+		uci -q set ttyd.@ttyd[0].command='/bin/login'
+		uci -q commit ttyd || true
+	fi
+	/etc/init.d/ttyd enable 2>/dev/null || true
+fi
+
+# nlbwmon: per-IP accounting enabled at boot. The default 24h commit is
+# shortened to 6h when the package still has its stock value; the database
+# lives under /var (tmpfs), so commits do not wear flash.
+if [ -f /etc/config/nlbwmon ]; then
+	commit_interval="$(uci -q get nlbwmon.@nlbwmon[0].commit_interval || true)"
+	case "$commit_interval" in
+	'' | 24h)
+		uci -q set nlbwmon.@nlbwmon[0].commit_interval='6h'
+		;;
+	esac
+	if [ -z "$(uci -q get nlbwmon.@nlbwmon[0].database_generations || true)" ]; then
+		uci -q set nlbwmon.@nlbwmon[0].database_generations='7'
+	fi
+	uci -q commit nlbwmon || true
+	/etc/init.d/nlbwmon enable 2>/dev/null || true
+fi
+
+# zram and QoS mode are boot services, not procd instances.
+/etc/init.d/zram enable 2>/dev/null || true
+/etc/init.d/qca-nss-ecm enable 2>/dev/null || true
+/etc/init.d/qosswitch enable 2>/dev/null || true
+
+# Reduce unnecessary logging I/O on a 512MB router, but keep errors.
+if [ -f /etc/config/uhttpd ]; then
+	uci -q set uhttpd.main.log_stderr='0'
+	uci -q commit uhttpd || true
+fi
+if [ -f /etc/config/dhcp ]; then
+	uci -q set dhcp.@dnsmasq[0].logqueries='0'
+	uci -q set dhcp.@dnsmasq[0].logdhcp='0'
+	uci -q commit dhcp || true
+fi
+
+exit 0
