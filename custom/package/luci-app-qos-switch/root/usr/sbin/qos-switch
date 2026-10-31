@@ -281,6 +281,22 @@ apply_soft_eqos() {
 }
 
 apply_soft() {
+	local engine
+
+	engine="$(get_opt soft_engine)"
+	[ -n "$engine" ] || engine=sqm
+	case "$engine" in
+	eqos)
+		[ -x /etc/init.d/eqos ] || die "未找到 eqos 服务"
+		;;
+	sqm | '')
+		[ -f /usr/lib/sqm/piece_of_cake.qos ] || die "未找到 piece_of_cake.qos，请确认 sqm-scripts 已安装"
+		;;
+	*)
+		die "未知 soft_engine: $engine"
+		;;
+	esac
+
 	disable_sqm
 	stop_eqos
 	cleanup_qdiscs
@@ -289,10 +305,9 @@ apply_soft() {
 		die "ECM 未能停止，软件 QoS 可能被硬件加速绕过"
 	fi
 
-	case "$(get_opt soft_engine)" in
+	case "$engine" in
 	eqos) apply_soft_eqos ;;
 	sqm | '') apply_soft_sqm ;;
-	*) die "未知 soft_engine: $(get_opt soft_engine)" ;;
 	esac
 }
 
