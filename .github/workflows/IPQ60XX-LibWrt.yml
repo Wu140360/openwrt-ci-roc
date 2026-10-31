@@ -25,4 +25,6 @@ jobs:
       artifact_prefix: IPQ60XX
       manifest_file: libwrt-qualcommax-ipq60xx.manifest
       release_summary: >-
-        这是开启全功能NSS的6.12内核固件，默认主题为Aurora；该固件在ImmortalWrt的基础上，添加了额外的软件包cpufreq、ddns、upnp、wol、samba4、vlmcsd、autoreboot、uhttpd、frps、frpc、diskman、hd-idle、acme、wireguard、watchcat、3cat、passwall，并添加了若干工具，具体详见IPQ60XX.config和General.config。
+        这是兆能M2（ZN-M2 / IPQ6000）专用的6.12内核固件：完全不带WiFi，满血NSS数据面（drv/dp/ecm/crypto/cfi/mcs/clients），
+        启用NSS硬件QoS（qdisc+igs）与nss-ifb；默认主题Aurora；集成lucky万吉版、EasyTier、SmartDNS、nlbwmon、ttyd、UPnP、
+        KMS、WireGuard及完整USB/存储工具，具体详见IPQ60XX.config和General.config。

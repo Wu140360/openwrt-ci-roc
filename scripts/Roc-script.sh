@@ -38,6 +38,7 @@ else
   exit 1
 fi
 CONFIG_FILES+=("$(resolve_config_file "$GENERAL_CONFIG_FILE")")
+GENERAL_CONFIG_FILE="$(resolve_config_file "$GENERAL_CONFIG_FILE")"
 
 config_symbol_enabled() {
   local symbol="$1"
@@ -289,6 +290,13 @@ fi
 
 if package_enabled luci-app-lucky lucky; then
   clone_repository https://github.com/gdy666/luci-app-lucky main package/luci-app-lucky
+  # 使用 lucky 万吉版二进制：只在 tar.gz 前插入 _wanji，版本沿用上游 PKG_VERSION
+  # 注意：不能写成 \$(LUCKY_ARCH\)，GNU sed 会把 \) 前的 $ 当成行尾锚点导致匹配失败
+  sed -i 's#^\(PKG_SOURCE:=lucky_.*_Linux_.*\)\.tar\.gz$#\1_wanji.tar.gz#' package/luci-app-lucky/lucky/Makefile
+  grep -q '_wanji\.tar\.gz' package/luci-app-lucky/lucky/Makefile || { echo "Error: lucky wanji source was not patched" >&2; exit 1; }
+  # 下载的是万吉包，原哈希（非 skip 时）必然不匹配
+  sed -i 's#^PKG_HASH:=.*#PKG_HASH:=skip#' package/luci-app-lucky/lucky/Makefile
+  grep -q '^LUCKY_ARCH:=' package/luci-app-lucky/lucky/Makefile || { echo "Error: unexpected lucky Makefile layout" >&2; exit 1; }
 fi
 
 if package_enabled luci-app-wechatpush; then
@@ -308,6 +316,11 @@ fi
 if package_enabled luci-app-athena-led luci-i18n-athena-led-zh-cn; then
   clone_repository https://github.com/NONGFAH/luci-app-athena-led main package/luci-app-athena-led
   chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
+fi
+
+if package_enabled luci-app-easytier easytier; then
+  clone_repository https://github.com/EasyTier/luci-app-easytier main package/luci-app-easytier
+  # 已核实 25.12 feed 仍提供 luci-compat（该插件为 Lua CBI 页面，运行时确实依赖它），故保留依赖不动
 fi
 
 ### PassWall & OpenClash ###
@@ -338,3 +351,26 @@ fi
 
 ./scripts/feeds update -i -a
 ./scripts/feeds install -a
+
+# 自动补齐简体中文语言包：25.12 使用 zh_Hans，旧版使用 zh-cn，两种后缀都追加，
+# 无效符号（如语言包不存在或对应插件未选中）会在 make defconfig 时被静默丢弃。
+append_zh_hans_i18n() {
+  local po_dir pkg_name suffix symbol
+
+  while IFS= read -r po_dir; do
+    pkg_name="$(basename "$(dirname "$(dirname "$po_dir")")")"
+    pkg_name="${pkg_name#luci-app-}"
+    pkg_name="${pkg_name#luci-theme-}"
+    for suffix in zh_Hans zh-cn; do
+      symbol="CONFIG_PACKAGE_luci-i18n-${pkg_name}-${suffix}=y"
+      grep -Fqx -- "$symbol" "$GENERAL_CONFIG_FILE" ||
+        printf '%s\n' "$symbol" >> "$GENERAL_CONFIG_FILE"
+    done
+  done < <(find feeds/luci package -type d \
+    \( -path '*/luci-app-*/po/zh_Hans' -o -path '*/luci-app-*/po/zh-cn' \
+    -o -path '*/luci-theme-*/po/zh_Hans' -o -path '*/luci-theme-*/po/zh-cn' \) \
+    2>/dev/null | LC_ALL=C sort -u)
+}
+
+append_zh_hans_i18n
+
