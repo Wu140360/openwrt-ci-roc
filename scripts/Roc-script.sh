@@ -132,6 +132,74 @@ clone_repository() {
 mkdir -p "$(dirname "$THIRD_PARTY_SOURCES_FILE")"
 printf 'Repository\tBranch\tCommit\n' >"$THIRD_PARTY_SOURCES_FILE"
 
+# LibWrt's qualcommax target pulls a broad set of NSS clients and the complete
+# WiFi stack into DEFAULT_PACKAGES. For this wired-only ZN M2 build, remove the
+# unrelated NSS clients and WiFi defaults from the target before .config is
+# evaluated. The required NSS core, ECM, crypto, qdisc, IGS, bridge, VLAN,
+# PPPoE, netlink (nssinfo) and nss-ifb stay in place.
+prune_qualcommax_defaults() {
+	local qualcommax_makefile="target/linux/qualcommax/Makefile"
+	local ipq60xx_target_mk="target/linux/qualcommax/ipq60xx/target.mk"
+	local ipq60xx_image_mk="target/linux/qualcommax/image/ipq60xx.mk"
+
+	python3 - "$qualcommax_makefile" "$ipq60xx_target_mk" "$ipq60xx_image_mk" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+qualcommax, ipq60xx_target, ipq60xx_image = map(Path, sys.argv[1:])
+for path in (qualcommax, ipq60xx_target, ipq60xx_image):
+    if not path.is_file():
+        raise SystemExit(f"Error: expected target file not found: {path}")
+
+remove_defaults = {
+    "kmod-qca-nss-drv-eogremgr",
+    "kmod-qca-nss-drv-gre",
+    "kmod-qca-nss-drv-l2tpv2",
+    "kmod-qca-nss-drv-lag-mgr",
+    "kmod-qca-nss-drv-map-t",
+    "kmod-qca-nss-drv-match",
+    "kmod-qca-nss-drv-mirror",
+    "kmod-qca-nss-drv-pptp",
+    "kmod-qca-nss-drv-tun6rd",
+    "kmod-qca-nss-drv-tunipip6",
+    "kmod-qca-nss-drv-vxlanmgr",
+    "kmod-qca-nss-drv-wifi-meshmgr",
+}
+
+lines = qualcommax.read_text(encoding="utf-8").splitlines(keepends=True)
+kept = []
+for line in lines:
+    name = line.strip().rstrip("\\").strip()
+    if name not in remove_defaults:
+        kept.append(line)
+text = "".join(kept)
+
+# Drop WiFi defaults from the same DEFAULT_PACKAGES block. Remove the longest
+# tokens first so kmod-ath11k-ahb/pci are not partially matched.
+for token in (
+    "wpad-openssl",
+    "kmod-ath11k-ahb",
+    "kmod-ath11k-pci",
+    "kmod-ath11k",
+):
+    text = re.sub(rf"(?<!\S){re.escape(token)}(?!\S)", "", text)
+qualcommax.write_text(text, encoding="utf-8")
+
+target_text = ipq60xx_target.read_text(encoding="utf-8")
+target_text = re.sub(r"(?<!\S)ath11k-firmware-ipq6018(?!\S)", "", target_text)
+ipq60xx_target.write_text(target_text, encoding="utf-8")
+
+image_text = ipq60xx_image.read_text(encoding="utf-8")
+image_text = image_text.replace(
+    "DEVICE_PACKAGES := ipq-wifi-zn_m2", "DEVICE_PACKAGES :="
+)
+ipq60xx_image.write_text(image_text, encoding="utf-8")
+PY
+}
+
+prune_qualcommax_defaults
+
 # Default LAN address, firmware hostname and LuCI build attribution.
 sed -i 's/192.168.1.1/192.168.2.1/g' package/base-files/files/bin/config_generate
 sed -i "s/hostname='.*'/hostname='ZN-M2'/g" package/base-files/files/bin/config_generate

@@ -40,6 +40,8 @@ libwrt-qualcommax-ipq60xx-zn_m2-squashfs-sysupgrade.bin
 | 网络 | PPPoE、DHCPv6/odhcpd、WireGuard、UPnP（miniupnpd nftables）、SmartDNS、lucky 万吉 |
 | 系统/工具 | zram-swap(lz4)、ttyd、nlbwmon、KMS(vlmcsd)、watchcat、diskman、cpufreq、uhttpd、package-manager、tcpdump/iperf3/mtr/htop/btop/tmux/nano-full 等 |
 
+`Roc-script.sh` 会在 `make defconfig` 之前从 qualcommax 默认包列表里剔除无关 NSS 客户端（GRE/L2TP/PPTP/MAP-T/mirror 等）和 WiFi 默认包（wpad/ath11k/ipq-wifi），因此最终镜像只保留本页列出的有线 NSS 组件。
+
 **lucky 使用万吉版**：`lucky/Makefile` 的 `PKG_SOURCE` 通过 `$(PKG_VERSION)` 和 `$(LUCKY_ARCH)` 生成 `_wanji.tar.gz` 文件名，不写死版本；仓库内 `custom/lucky/` 若存在与 Makefile 同版本的本地包，会复制到 `dl/` 优先使用。万吉版已包含 DDNS、ACME、WOL、FTP/WebDAV 等能力，因此固件不再安装 ddns/acme/wol/samba4。
 
 ## QoS 三档一键切换
