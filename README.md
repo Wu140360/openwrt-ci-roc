@@ -50,7 +50,7 @@ LuCI 菜单：**网络 → QoS 一键切换**。
 |---|---|---|
 | 关闭 | 停止 SQM/eqos，清理 qdisc | 恢复并保持开启 |
 | 硬件简易 QoS | 使用 `sqm-scripts-nss` 的 `nss-zk.qos`，接口为逻辑 `wan`，上下行速率取页面值 | 保持开启 |
-| 软件多功能 QoS | 选择 SQM+Cake 或 eqos（按 IP/MAC） | **先停止 ECM**，否则硬件加速会绕过 CPU 整形 |
+| 软件多功能 QoS | 选择 SQM+Cake 或 eqos（按 IP 限速） | **先停止 ECM**，否则硬件加速会绕过 CPU 整形 |
 
 说明：
 
@@ -79,7 +79,7 @@ custom/lucky/                        # （可选）本地 lucky 万吉包
 
 - `qca-nss-ecm` 的启停命令已经按 `nss-packages` 的 `qca-nss-ecm.init` 实现，但实际模块加载、debugfs 和 NSS 固件版本仍需在 M2 上确认。
 - `nss-zk.qos` 的 ingress 使用 `ifb@wan`（不是 `nssifb`），状态页同时检查两者。
-- 软件 Cake 模式关闭 ECM 后，请用 `tc -s qdisc show dev wan`、`nssinfo`/`nss_stats` 和实际限速测试确认没有硬件旁路。
+- 软件 Cake 模式关闭 ECM 后，请用 `tc -s qdisc show dev <WAN 设备>`、`nssinfo`/`nss_stats` 和实际限速测试确认没有硬件旁路。
 - 首次启动后建议在 ttyd 运行 `qos-switch status`、`logread -e qos-switch`、`nss_stats` 检查。
 
 ## 上游与许可
