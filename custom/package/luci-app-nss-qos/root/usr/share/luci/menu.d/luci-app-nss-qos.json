@@ -4,7 +4,7 @@
 		"order": 60,
 		"action": {
 			"type": "view",
-			"path": "nss-qos"
+			"path": "nss-qos2"
 		},
 		"depends": {
 			"acl": [ "luci-app-nss-qos" ]
