@@ -27,6 +27,14 @@ return view.extend({
 			_('按网口分别配置 NSS 硬件整形。每条规则可选择 wan/lan1/lan2/lan3；' +
 			  '出方向使用 nsstbl+nssfq_codel，入方向使用 ifb+nssmirred。ECM 始终开启，不使用软件 QoS。'));
 
+		var master = map.section(form.NamedSection, 'globals', 'globals', _('总开关'));
+		master.anonymous = true;
+
+		var mo = master.option(form.Flag, 'enabled', _('启用 NSS 硬件 QoS'),
+			_('总开关关闭时，保存并应用会立即清理所有已下发的队列，规则配置保留'));
+		mo.default = '0';
+		mo.rmempty = false;
+
 		var section = map.section(form.GridSection, 'rule', _('整形规则'));
 		section.addremove = true;
 		section.sortable = true;

@@ -223,6 +223,12 @@ apply_rule() {
 }
 
 apply_qos() {
+	config_load "$CONFIG"
+	if [ "$(uci -q get "$CONFIG.globals.enabled")" != "1" ]; then
+		cleanup_state
+		log "master switch off"
+		return 0
+	fi
 	load_modules
 	cleanup_state
 	: >"$STATE"
@@ -258,6 +264,9 @@ show_rule() {
 }
 
 show_status() {
+	printf '=== 总开关 ===\n'
+	printf 'enabled: %s\n' "$(uci -q get "$CONFIG.globals.enabled")"
+	printf '\n'
 	printf '=== NSS 接口 ===\n'
 	list_nss_ifaces | tr '\n' ' '
 	printf '\n'
