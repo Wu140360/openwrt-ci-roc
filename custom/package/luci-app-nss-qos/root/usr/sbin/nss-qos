@@ -1,0 +1,242 @@
+#!/bin/sh
+# NSS hardware QoS control for Qualcomm IPQ60xx NSS builds.
+# Applies nsstbl/nssprio/nssfq_codel on the physical WAN device (egress) and
+# on an ifb fed by act_nssmirred (ingress). ECM offload stays enabled.
+
+. /lib/functions.sh
+. /lib/functions/network.sh
+
+CONFIG=nssqos
+IFB=nss-qos-ifb
+TC=/sbin/tc
+IP=/sbin/ip
+
+log() { logger -t nss-qos "$*" 2>/dev/null || true; }
+
+fail() {
+	echo "错误: $*" >&2
+	log "error: $*"
+	exit 1
+}
+
+get_opt() { uci -q get "$CONFIG.main.$1" 2>/dev/null || true; }
+
+is_uint() {
+	case "$1" in
+	'' | *[!0-9]*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+resolve_wan() {
+	local configured dev
+
+	configured="$(get_opt wan)"
+	if [ -z "$configured" ] || [ "$configured" = auto ]; then
+		dev=""
+		network_get_physdev dev wan 2>/dev/null || true
+		[ -n "$dev" ] || network_get_device dev wan 2>/dev/null || true
+		[ -n "$dev" ] || dev=wan
+	else
+		dev="$configured"
+	fi
+	printf '%s\n' "$dev"
+}
+
+dev_mtu() {
+	local mtu
+
+	mtu="$($IP link show dev "$1" 2>/dev/null |
+		awk '{for (i = 1; i <= NF; i++) if ($i == "mtu") {print $(i + 1); exit}}')"
+	[ -n "$mtu" ] || mtu=1500
+	printf '%s\n' "$mtu"
+}
+
+burst_of() {
+	local speed="$1" mtu="$2" burst
+
+	burst=$((speed / 8))
+	[ "$burst" -ge "$mtu" ] || burst="$mtu"
+	burst=$((burst / mtu * mtu))
+	[ "$burst" -ge "$mtu" ] || burst="$mtu"
+	# nsstbl child qdiscs default to a 1514 byte MTU, keep bursts above it
+	[ "$burst" -ge 1518 ] || burst=1518
+	printf '%s\n' "$burst"
+}
+
+limit_of() {
+	local speed="$1" mtu="$2" limit
+
+	limit=$((speed * 125 / 10 / mtu))
+	[ "$limit" -ge 200 ] || limit=200
+	printf '%s\n' "$limit"
+}
+
+quantum_of() {
+	local speed="$1" mtu="$2" quantum
+
+	quantum="$mtu"
+	if [ "$speed" -lt 100000 ]; then
+		quantum=$((mtu / 5))
+		[ "$quantum" -ge 300 ] || quantum=300
+	fi
+	printf '%s\n' "$quantum"
+}
+
+load_modules() {
+	local module
+
+	for module in qca_nss_qdisc act_nssmirred ifb; do
+		[ -d "/sys/module/$module" ] || modprobe "$module" 2>/dev/null ||
+			fail "无法加载内核模块 $module"
+	done
+}
+
+cleanup_dev() {
+	local dev="$1" parent
+
+	[ -d "/sys/class/net/$dev" ] || return 0
+	$TC qdisc list dev "$dev" 2>/dev/null |
+		awk '$1 == "qdisc" && $4 == "parent" {print $5}' |
+		sort -t: -k1nr,2nr |
+		while read -r parent; do
+			[ -n "$parent" ] || continue
+			$TC qdisc del dev "$dev" parent "$parent" 2>/dev/null
+		done
+	$TC qdisc del dev "$dev" root 2>/dev/null
+	return 0
+}
+
+cleanup_ingress() {
+	local wan="$1"
+
+	$TC qdisc del dev "$wan" ingress 2>/dev/null
+	if [ -d "/sys/class/net/$IFB" ]; then
+		cleanup_dev "$IFB"
+		$IP link set dev "$IFB" down 2>/dev/null
+		$IP link del dev "$IFB" 2>/dev/null
+	fi
+	return 0
+}
+
+cleanup_all() {
+	local wan
+
+	wan="$(resolve_wan)"
+	cleanup_dev "$wan"
+	cleanup_ingress "$wan"
+	return 0
+}
+
+build_tree() {
+	local dev="$1" speed="$2" mtu="$3"
+	local burst burst10 burst40 speed10 speed40 limit quantum target
+
+	burst="$(burst_of "$speed" "$mtu")"
+	speed10=$((speed / 10))
+	[ "$speed10" -ge 1 ] || speed10=1
+	speed40=$((speed * 4 / 10))
+	[ "$speed40" -ge 1 ] || speed40=1
+	burst10="$(burst_of "$speed10" "$mtu")"
+	burst40="$(burst_of "$speed40" "$mtu")"
+	limit="$(limit_of "$speed" "$mtu")"
+	quantum="$(quantum_of "$speed" "$mtu")"
+	target="$(get_opt target)"
+	[ -n "$target" ] || target=5ms
+
+	$TC qdisc add dev "$dev" root handle 1: nsstbl rate "${speed}kbit" burst "$burst" mtu "$mtu" accel_mode 0 || return 1
+	$TC qdisc add dev "$dev" parent 1: handle 10: nssprio bands 3 accel_mode 0 || return 1
+	$TC qdisc add dev "$dev" parent 10:1 handle 100: nsstbl rate "${speed10}kbit" burst "$burst10" accel_mode 0 || return 1
+	$TC qdisc add dev "$dev" parent 100: handle 1000: nsspfifo limit 100 accel_mode 0 || return 1
+	$TC qdisc add dev "$dev" parent 10:2 handle 200: nsstbl rate "${speed40}kbit" burst "$burst40" accel_mode 0 || return 1
+	$TC qdisc add dev "$dev" parent 200: handle 2000: nssred limit 100k min 30k max 80k avpkt 1k burst 55 probability 0.50 accel_mode 0 || return 1
+	$TC qdisc add dev "$dev" parent 10:3 handle 300: nssfq_codel limit "$limit" target "$target" interval 100ms flows 1024 quantum "$quantum" set_default accel_mode 0 || return 1
+}
+
+apply_qos() {
+	local wan up down mtu
+
+	[ "$(get_opt enabled)" = 1 ] || {
+		cleanup_all
+		log "disabled"
+		return 0
+	}
+
+	wan="$(resolve_wan)"
+	[ -d "/sys/class/net/$wan" ] || fail "WAN 设备不存在: $wan"
+
+	up="$(get_opt upload)"
+	down="$(get_opt download)"
+	is_uint "$up" || up=0
+	is_uint "$down" || down=0
+	[ "$up" -gt 0 ] || [ "$down" -gt 0 ] || {
+		cleanup_all
+		log "no rate configured"
+		return 0
+	}
+
+	load_modules
+	# account for the Ethernet + NSS header overhead like sqm-scripts does
+	mtu="$(dev_mtu "$wan")"
+	mtu=$((mtu + 18))
+	cleanup_all
+
+	if [ "$up" -gt 0 ]; then
+		build_tree "$wan" "$up" "$mtu" || {
+			cleanup_all
+			fail "上行整形配置失败"
+		}
+	fi
+
+	if [ "$down" -gt 0 ]; then
+		$IP link add name "$IFB" type ifb 2>/dev/null || true
+		$IP link set dev "$IFB" up 2>/dev/null || {
+			cleanup_all
+			fail "无法创建 $IFB"
+		}
+		$TC qdisc add dev "$wan" handle ffff: ingress 2>/dev/null || true
+		$TC filter add dev "$wan" parent ffff: protocol all u32 match u32 0 0 \
+			action nssmirred redirect dev "$IFB" fromdev "$wan" || {
+			cleanup_all
+			fail "下行 nssmirred 重定向配置失败"
+		}
+		build_tree "$IFB" "$down" "$mtu" || {
+			cleanup_all
+			fail "下行整形配置失败"
+		}
+	fi
+
+	log "applied wan=$wan up=$up kbps down=$down kbps"
+}
+
+show_status() {
+	local wan up down
+
+	wan="$(resolve_wan)"
+	up="$(get_opt upload)"
+	down="$(get_opt download)"
+	printf 'enabled : %s\n' "$(get_opt enabled)"
+	printf 'wan     : %s\n' "$wan"
+	printf 'upload  : %s kbps\n' "${up:-0}"
+	printf 'download: %s kbps\n' "${down:-0}"
+	printf '\n--- egress (%s) ---\n' "$wan"
+	$TC -s qdisc show dev "$wan" 2>/dev/null | head -24
+	if [ -d "/sys/class/net/$IFB" ]; then
+		printf '\n--- ingress (%s) ---\n' "$IFB"
+		$TC -s qdisc show dev "$IFB" 2>/dev/null | head -24
+	fi
+}
+
+case "${1:-}" in
+apply | start) apply_qos ;;
+stop) cleanup_all ;;
+restart | reload)
+	cleanup_all
+	apply_qos
+	;;
+status) show_status ;;
+*)
+	echo "用法: $0 {apply|stop|restart|status}" >&2
+	exit 1
+	;;
+esac

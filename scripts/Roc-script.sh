@@ -323,6 +323,14 @@ if package_enabled luci-app-easytier easytier; then
   # 已核实 25.12 feed 仍提供 luci-compat（该插件为 Lua CBI 页面，运行时确实依赖它），故保留依赖不动
 fi
 
+# 自建 NSS 硬件 QoS LuCI 页面（源码在仓库 custom/ 目录）
+if package_enabled luci-app-nss-qos; then
+  rm -rf package/luci-app-nss-qos
+  cp -a "$WORKSPACE/custom/package/luci-app-nss-qos" package/
+  chmod +x package/luci-app-nss-qos/root/etc/init.d/nssqos \
+    package/luci-app-nss-qos/root/usr/sbin/nss-qos
+fi
+
 ### PassWall & OpenClash ###
 
 if package_enabled luci-app-passwall luci-app-passwall2; then

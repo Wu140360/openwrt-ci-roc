@@ -1,0 +1,13 @@
+{
+	"admin/network/nss-qos": {
+		"title": "NSS 硬件 QoS",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "nss-qos"
+		},
+		"depends": {
+			"acl": [ "luci-app-nss-qos" ]
+		}
+	}
+}

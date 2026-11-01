@@ -1,0 +1,22 @@
+{
+	"luci-app-nss-qos": {
+		"description": "Grant access to the NSS hardware QoS control",
+		"read": {
+			"uci": [ "nssqos" ],
+			"file": {
+				"/usr/sbin/nss-qos": [ "exec" ],
+				"/etc/init.d/nssqos": [ "exec" ]
+			}
+		},
+		"write": {
+			"uci": [ "nssqos" ],
+			"file": {
+				"/usr/sbin/nss-qos": [ "exec" ],
+				"/etc/init.d/nssqos": [ "exec" ]
+			},
+			"ubus": {
+				"uci": [ "apply", "confirm" ]
+			}
+		}
+	}
+}
