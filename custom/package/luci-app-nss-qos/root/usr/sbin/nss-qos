@@ -1,15 +1,16 @@
 #!/bin/sh
-# NSS hardware QoS control for Qualcomm IPQ60xx NSS builds.
-# Applies nsstbl/nssprio/nssfq_codel on the physical WAN device (egress) and
-# on an ifb fed by act_nssmirred (ingress). ECM offload stays enabled.
-
-. /lib/functions.sh
-. /lib/functions/network.sh
+# NSS hardware QoS control (multi-interface rules).
+# For every enabled rule: nsstbl + nssprio + nssfq_codel on the selected
+# nss-dp interface (egress) and, optionally, ifb + act_nssmirred for ingress.
+# ECM hardware offload stays enabled; no software QoS is involved.
 
 CONFIG=nssqos
-IFB=nss-qos-ifb
+
+. /lib/functions.sh
+STATE=/var/run/nssqos.state
 TC=/sbin/tc
 IP=/sbin/ip
+APPLY_FAILED=0
 
 log() { logger -t nss-qos "$*" 2>/dev/null || true; }
 
@@ -19,8 +20,6 @@ fail() {
 	exit 1
 }
 
-get_opt() { uci -q get "$CONFIG.main.$1" 2>/dev/null || true; }
-
 is_uint() {
 	case "$1" in
 	'' | *[!0-9]*) return 1 ;;
@@ -28,19 +27,17 @@ is_uint() {
 	esac
 }
 
-resolve_wan() {
-	local configured dev
+ifb_for() { printf 'nssq-%s\n' "$1"; }
 
-	configured="$(get_opt wan)"
-	if [ -z "$configured" ] || [ "$configured" = auto ]; then
-		dev=""
-		network_get_physdev dev wan 2>/dev/null || true
-		[ -n "$dev" ] || network_get_device dev wan 2>/dev/null || true
-		[ -n "$dev" ] || dev=wan
-	else
-		dev="$configured"
-	fi
-	printf '%s\n' "$dev"
+list_nss_ifaces() {
+	local d n driver
+
+	for d in /sys/class/net/*; do
+		n="${d##*/}"
+		[ -e "$d/device" ] || continue
+		driver="$(basename "$(readlink -f "$d/device/driver" 2>/dev/null)" 2>/dev/null)"
+		[ "$driver" = "nss-dp" ] && printf '%s\n' "$n"
+	done | sort
 }
 
 dev_mtu() {
@@ -107,31 +104,38 @@ cleanup_dev() {
 	return 0
 }
 
-cleanup_ingress() {
-	local wan="$1"
+cleanup_iface() {
+	local iface="$1" ifb
 
-	$TC qdisc del dev "$wan" ingress 2>/dev/null
-	if [ -d "/sys/class/net/$IFB" ]; then
-		cleanup_dev "$IFB"
-		$IP link set dev "$IFB" down 2>/dev/null
-		$IP link del dev "$IFB" 2>/dev/null
+	ifb="$(ifb_for "$iface")"
+	cleanup_dev "$iface"
+	$TC qdisc del dev "$iface" ingress 2>/dev/null
+	if [ -d "/sys/class/net/$ifb" ]; then
+		cleanup_dev "$ifb"
+		$IP link set dev "$ifb" down 2>/dev/null
+		$IP link del dev "$ifb" 2>/dev/null
 	fi
 	return 0
 }
 
-cleanup_all() {
-	local wan
+cleanup_state() {
+	local iface ifb
 
-	wan="$(resolve_wan)"
-	cleanup_dev "$wan"
-	cleanup_ingress "$wan"
+	[ -f "$STATE" ] || return 0
+	while IFS="$(printf '\t')" read -r iface ifb; do
+		[ -n "$iface" ] || continue
+		[ -n "$ifb" ] || ifb="$(ifb_for "$iface")"
+		cleanup_iface "$iface" "$ifb"
+	done <"$STATE"
+	rm -f "$STATE"
 	return 0
 }
 
 build_tree() {
-	local dev="$1" speed="$2" mtu="$3"
-	local burst burst10 burst40 speed10 speed40 limit quantum target
+	local dev="$1" speed="$2" mtu="$3" target="$4"
+	local burst burst10 burst40 speed10 speed40 limit quantum
 
+	[ -n "$target" ] || target=5ms
 	burst="$(burst_of "$speed" "$mtu")"
 	speed10=$((speed / 10))
 	[ "$speed10" -ge 1 ] || speed10=1
@@ -141,8 +145,6 @@ build_tree() {
 	burst40="$(burst_of "$speed40" "$mtu")"
 	limit="$(limit_of "$speed" "$mtu")"
 	quantum="$(quantum_of "$speed" "$mtu")"
-	target="$(get_opt target)"
-	[ -n "$target" ] || target=5ms
 
 	$TC qdisc add dev "$dev" root handle 1: nsstbl rate "${speed}kbit" burst "$burst" mtu "$mtu" accel_mode 0 || return 1
 	$TC qdisc add dev "$dev" parent 1: handle 10: nssprio bands 3 accel_mode 0 || return 1
@@ -153,90 +155,136 @@ build_tree() {
 	$TC qdisc add dev "$dev" parent 10:3 handle 300: nssfq_codel limit "$limit" target "$target" interval 100ms flows 1024 quantum "$quantum" set_default accel_mode 0 || return 1
 }
 
-apply_qos() {
-	local wan up down mtu
+apply_rule() {
+	local sec="$1" enabled iface egress ingress mtu ifb driver target
 
-	[ "$(get_opt enabled)" = 1 ] || {
-		cleanup_all
-		log "disabled"
+	enabled="$(uci -q get "$CONFIG.$sec.enabled")"
+	[ "$enabled" = 1 ] || return 0
+	iface="$(uci -q get "$CONFIG.$sec.iface")"
+	[ -n "$iface" ] || return 0
+	if [ ! -d "/sys/class/net/$iface" ]; then
+		log "skip missing interface $iface"
 		return 0
-	}
-
-	wan="$(resolve_wan)"
-	[ -d "/sys/class/net/$wan" ] || fail "WAN 设备不存在: $wan"
-
-	up="$(get_opt upload)"
-	down="$(get_opt download)"
-	is_uint "$up" || up=0
-	is_uint "$down" || down=0
-	[ "$up" -gt 0 ] || [ "$down" -gt 0 ] || {
-		cleanup_all
-		log "no rate configured"
+	fi
+	driver="$(basename "$(readlink -f "/sys/class/net/$iface/device/driver" 2>/dev/null)" 2>/dev/null)"
+	if [ "$driver" != "nss-dp" ]; then
+		log "skip non nss-dp interface $iface"
 		return 0
-	}
+	fi
 
-	load_modules
-	# account for the Ethernet + NSS header overhead like sqm-scripts does
-	mtu="$(dev_mtu "$wan")"
+	egress="$(uci -q get "$CONFIG.$sec.egress")"
+	ingress="$(uci -q get "$CONFIG.$sec.ingress")"
+	is_uint "$egress" || egress=0
+	is_uint "$ingress" || ingress=0
+	[ "$egress" -gt 0 ] || [ "$ingress" -gt 0 ] || return 0
+
+	target="$(uci -q get "$CONFIG.$sec.target")"
+	[ -n "$target" ] || target=5ms
+	mtu="$(dev_mtu "$iface")"
 	mtu=$((mtu + 18))
-	cleanup_all
+	ifb="$(ifb_for "$iface")"
+	cleanup_iface "$iface"
 
-	if [ "$up" -gt 0 ]; then
-		build_tree "$wan" "$up" "$mtu" || {
-			cleanup_all
-			fail "上行整形配置失败"
+	if [ "$egress" -gt 0 ]; then
+		build_tree "$iface" "$egress" "$mtu" "$target" || {
+			cleanup_iface "$iface"
+			log "egress shaping failed on $iface"
+			APPLY_FAILED=1
+			return 0
 		}
 	fi
 
-	if [ "$down" -gt 0 ]; then
-		$IP link add name "$IFB" type ifb 2>/dev/null || true
-		$IP link set dev "$IFB" up 2>/dev/null || {
-			cleanup_all
-			fail "无法创建 $IFB"
+	if [ "$ingress" -gt 0 ]; then
+		$IP link add name "$ifb" type ifb 2>/dev/null || true
+		$IP link set dev "$ifb" up 2>/dev/null || {
+			cleanup_iface "$iface"
+			log "cannot create $ifb"
+			APPLY_FAILED=1
+			return 0
 		}
-		$TC qdisc add dev "$wan" handle ffff: ingress 2>/dev/null || true
-		$TC filter add dev "$wan" parent ffff: protocol all u32 match u32 0 0 \
-			action nssmirred redirect dev "$IFB" fromdev "$wan" || {
-			cleanup_all
-			fail "下行 nssmirred 重定向配置失败"
+		$TC qdisc add dev "$iface" handle ffff: ingress 2>/dev/null || true
+		$TC filter add dev "$iface" parent ffff: protocol all u32 match u32 0 0 \
+			action nssmirred redirect dev "$ifb" fromdev "$iface" || {
+			cleanup_iface "$iface"
+			log "nssmirred failed on $iface"
+			APPLY_FAILED=1
+			return 0
 		}
-		build_tree "$IFB" "$down" "$mtu" || {
-			cleanup_all
-			fail "下行整形配置失败"
+		build_tree "$ifb" "$ingress" "$mtu" "$target" || {
+			cleanup_iface "$iface"
+			log "ingress shaping failed on $iface"
+			APPLY_FAILED=1
+			return 0
 		}
 	fi
 
-	log "applied wan=$wan up=$up kbps down=$down kbps"
+	printf '%s\t%s\n' "$iface" "$ifb" >>"$STATE"
+	return 0
+}
+
+apply_qos() {
+	load_modules
+	cleanup_state
+	: >"$STATE"
+	APPLY_FAILED=0
+	config_load "$CONFIG"
+	config_foreach apply_rule rule
+	if [ "$APPLY_FAILED" != 0 ]; then
+		cleanup_state
+		fail "部分规则应用失败，已回滚"
+	fi
+	log "applied rules from $CONFIG"
+}
+
+show_rule() {
+	local sec="$1" enabled iface egress ingress ifb
+
+	enabled="$(uci -q get "$CONFIG.$sec.enabled")"
+	iface="$(uci -q get "$CONFIG.$sec.iface")"
+	egress="$(uci -q get "$CONFIG.$sec.egress")"
+	ingress="$(uci -q get "$CONFIG.$sec.ingress")"
+	printf '\n--- %s (启用=%s 出=%s kbps 入=%s kbps) ---\n' \
+		"$iface" "${enabled:-0}" "${egress:-0}" "${ingress:-0}"
+	[ -d "/sys/class/net/$iface" ] || {
+		echo "接口不存在"
+		return 0
+	}
+	$TC -s qdisc show dev "$iface" 2>/dev/null | head -24
+	ifb="$(ifb_for "$iface")"
+	if [ -d "/sys/class/net/$ifb" ]; then
+		printf -- '--- 入方向 (%s) ---\n' "$ifb"
+		$TC -s qdisc show dev "$ifb" 2>/dev/null | head -24
+	fi
 }
 
 show_status() {
-	local wan up down
-
-	wan="$(resolve_wan)"
-	up="$(get_opt upload)"
-	down="$(get_opt download)"
-	printf 'enabled : %s\n' "$(get_opt enabled)"
-	printf 'wan     : %s\n' "$wan"
-	printf 'upload  : %s kbps\n' "${up:-0}"
-	printf 'download: %s kbps\n' "${down:-0}"
-	printf '\n--- egress (%s) ---\n' "$wan"
-	$TC -s qdisc show dev "$wan" 2>/dev/null | head -24
-	if [ -d "/sys/class/net/$IFB" ]; then
-		printf '\n--- ingress (%s) ---\n' "$IFB"
-		$TC -s qdisc show dev "$IFB" 2>/dev/null | head -24
+	printf '=== NSS 接口 ===\n'
+	list_nss_ifaces | tr '\n' ' '
+	printf '\n'
+	if [ -f "$STATE" ]; then
+		printf '=== 已应用 ===\n'
+		cat "$STATE"
 	fi
+	config_load "$CONFIG"
+	config_foreach show_rule rule
+}
+
+stop_all() {
+	cleanup_state
+	log "stopped"
 }
 
 case "${1:-}" in
+list) list_nss_ifaces ;;
 apply | start) apply_qos ;;
-stop) cleanup_all ;;
+stop) stop_all ;;
 restart | reload)
-	cleanup_all
+	stop_all
 	apply_qos
 	;;
 status) show_status ;;
 *)
-	echo "用法: $0 {apply|stop|restart|status}" >&2
+	echo "用法: $0 {list|apply|stop|restart|status}" >&2
 	exit 1
 	;;
 esac

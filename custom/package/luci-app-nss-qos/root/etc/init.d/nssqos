@@ -4,7 +4,6 @@ START=95
 STOP=10
 
 start_service() {
-	[ "$(uci -q get nssqos.main.enabled)" = 1 ] || return 0
 	/usr/sbin/nss-qos apply
 }
 

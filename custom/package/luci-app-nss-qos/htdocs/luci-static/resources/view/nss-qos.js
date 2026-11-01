@@ -8,61 +8,62 @@
 
 return view.extend({
 	load: function() {
-		return uci.load('nssqos');
+		return Promise.all([
+			uci.load('nssqos'),
+			fs.exec('/usr/sbin/nss-qos', ['list']).then(function(res) {
+				var out = (res && res.stdout ? res.stdout : '').trim();
+				var list = out.length ? out.split(/\s+/) : [];
+				return list.length ? list : [ 'wan', 'lan1', 'lan2', 'lan3' ];
+			}).catch(function() {
+				return [ 'wan', 'lan1', 'lan2', 'lan3' ];
+			})
+		]);
 	},
 
-	render: function() {
+	render: function(data) {
+		var ifaces = data[1];
+
 		var map = new form.Map('nssqos', _('NSS 硬件 QoS'),
-			_('在物理 WAN 设备上启用 NSS 硬件整形：上行 nsstbl + nssfq_codel，下行 ifb + nssmirred。ECM 硬件加速保持开启，不做软件 QoS。'));
+			_('按网口分别配置 NSS 硬件整形。每条规则可选择 wan/lan1/lan2/lan3；' +
+			  '出方向使用 nsstbl+nssfq_codel，入方向使用 ifb+nssmirred。ECM 始终开启，不使用软件 QoS。'));
 
-		var section = map.section(form.NamedSection, 'main', 'main', _('限速设置'));
+		var section = map.section(form.GridSection, 'rule', _('整形规则'));
+		section.addremove = true;
+		section.sortable = true;
+		section.anonymous = false;
+		section.addbtntitle = _('添加规则');
 
-		var o = section.option(form.Flag, 'enabled', _('启用'),
-			_('开启后开机自动应用；关闭会清理已有的 NSS 队列'));
+		var o = section.option(form.Flag, 'enabled', _('启用'));
 		o.default = '0';
 		o.rmempty = false;
 
-		o = section.option(form.Value, 'wan', _('WAN 设备'),
-			_('留空或 auto 自动识别物理 WAN 设备；也可手动填写如 wan'));
-		o.placeholder = 'auto';
-		o.default = 'auto';
+		o = section.option(form.ListValue, 'iface', _('接口'), _('只列出 NSS 数据面网口（nss-dp）'));
+		ifaces.forEach(function(i) {
+			o.value(i, i + (i == 'wan' ? _('（WAN）') : _('（LAN）')));
+		});
 		o.rmempty = false;
 
-		o = section.option(form.Value, 'upload', _('上行限速 (kbps)'),
-			_('0 表示不做上行整形；例如 100000 = 100 Mbps'));
+		o = section.option(form.Value, 'egress', _('出方向 (kbps)'),
+			_('WAN：上传限速；LAN：发往该口设备（下载）。0=不限'));
 		o.datatype = 'uinteger';
 		o.default = '0';
 		o.rmempty = false;
 
-		o = section.option(form.Value, 'download', _('下行限速 (kbps)'),
-			_('0 表示不做下行整形；下行通过 ifb + nssmirred 实现'));
+		o = section.option(form.Value, 'ingress', _('入方向 (kbps)'),
+			_('WAN：下载限速；LAN：该口设备发来（上传）。0=不限。LAN 入方向可能影响同网段互访'));
 		o.datatype = 'uinteger';
 		o.default = '0';
 		o.rmempty = false;
 
-		o = section.option(form.Value, 'target', _('fq_codel 延迟目标'),
-			_('默认 5ms，一般无需修改'));
+		o = section.option(form.Value, 'target', _('fq_codel 延迟目标'));
 		o.placeholder = '5ms';
 		o.default = '5ms';
-
-		o = section.option(form.Button, '_reapply', _('立即应用'),
-			_('不修改配置，按当前设置重新下发一次队列'));
-		o.inputtitle = _('重新应用');
-		o.inputstyle = 'apply';
-		o.onclick = function() {
-			return fs.exec('/usr/sbin/nss-qos', ['restart']).then(function(res) {
-				if (res && res.code)
-					ui.addNotification(null, E('p', {}, _('应用失败: ') + (res.stderr || res.code)), 'error');
-				else
-					ui.addNotification(null, E('p', {}, _('QoS 已重新应用')));
-			});
-		};
 
 		var status = E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, _('运行状态')),
 			E('pre', {
 				'id': 'nss-qos-status',
-				'style': 'white-space:pre-wrap;max-height:420px;overflow:auto;margin:0'
+				'style': 'white-space:pre-wrap;max-height:480px;overflow:auto;margin:0'
 			}, _('读取中…'))
 		]);
 
