@@ -152,10 +152,33 @@ sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.r
             ]),#" "$luci_system_js"
 
 # 调整NSS驱动q6_region内存区域预留大小（ipq6018.dtsi默认预留85MB，ipq6018-512m.dtsi默认预留55MB，带WiFi必须至少预留54MB，以下分别是改成预留16MB、32MB、64MB和96MB）
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x01000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
+# 兆能 M2 完全无 WiFi，采用仓库推荐的 16MB 预留（0x01000000）
+sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x01000000>/' \
+  target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
+grep -Fq '0x0 0x01000000' \
+  target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi || {
+  echo "Error: failed to set q6_region to 16MB" >&2
+  exit 1
+}
 # sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x02000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
 # sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x04000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
 # sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x06000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
+
+# 兆能 M2：完全不要 WiFi 功能
+# 1) 关闭设备树中的 &wifi 节点（q6_region 16MB 只在无 WiFi 场景成立）
+m2_dts="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-m2.dts"
+sed -i '/^&wifi {/,/^};/s/status = "okay"/status = "disabled"/' "$m2_dts"
+grep -A2 '^&wifi {' "$m2_dts" | grep -Fq 'status = "disabled"' || {
+  echo "Error: failed to disable the WiFi node in $m2_dts" >&2
+  exit 1
+}
+# 2) 移除该机型镜像默认注入的 WiFi 板级校准数据包
+ipq60xx_image="target/linux/qualcommax/image/ipq60xx.mk"
+sed -i '/^define Device\/zn_m2$/,/^endef$/s/DEVICE_PACKAGES := ipq-wifi-zn_m2/DEVICE_PACKAGES :=/' "$ipq60xx_image"
+if sed -n '/^define Device\/zn_m2$/,/^endef$/p' "$ipq60xx_image" | grep -q 'ipq-wifi-zn_m2'; then
+  echo "Error: failed to remove the ZN M2 WiFi board data package" >&2
+  exit 1
+fi
 
 # 调节IPQ60XX的1.5GHz频率电压(从0.9375V提高到0.95V，过低可能导致不稳定，过高可能增加功耗和发热，具体数值需要根据实际情况调整)
 # sed -i 's/opp-microvolt = <937500>;/opp-microvolt = <950000>;/' target/linux/qualcommax/patches-6.12/0038-v6.16-arm64-dts-qcom-ipq6018-add-1.5GHz-CPU-Frequency.patch
@@ -289,6 +312,21 @@ fi
 
 if package_enabled luci-app-lucky lucky; then
   clone_repository https://github.com/gdy666/luci-app-lucky main package/luci-app-lucky
+
+  # 兆能 M2：改用 Lucky 万吉版（wanji）二进制。
+  # 只替换 PKG_SOURCE 的文件名后缀，保留上游 Makefile 的 PKG_VERSION 与
+  # https://github.com/gdy666/lucky/releases/download/v$(PKG_VERSION) 下载地址，
+  # 不写死任何版本号；上游发布新版本并更新 Makefile 后，本固件自动跟随最新版。
+  lucky_makefile="package/luci-app-lucky/lucky/Makefile"
+  grep -Fq 'PKG_SOURCE:=lucky_$(PKG_VERSION)_Linux_$(LUCKY_ARCH).tar.gz' "$lucky_makefile" || {
+    echo "Error: unexpected Lucky source layout: $lucky_makefile" >&2
+    exit 1
+  }
+  sed -i 's#^\(PKG_SOURCE:=lucky_$(PKG_VERSION)_Linux_$(LUCKY_ARCH)\)\.tar\.gz#\1_wanji.tar.gz#' "$lucky_makefile"
+  grep -Fq '_wanji.tar.gz' "$lucky_makefile" || {
+    echo "Error: failed to switch Lucky to the wanji build" >&2
+    exit 1
+  }
 fi
 
 if package_enabled luci-app-wechatpush; then
