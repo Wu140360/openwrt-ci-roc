@@ -33,8 +33,9 @@ on:
         required: false
         type: boolean
         default: true
-  schedule:
-    - cron: "0 18 * * 5"
+  # 分支 5 为兆能 M2 专用：不定时编译其他机型
+  # schedule:
+  #   - cron: "0 18 * * 5"
 
 permissions:
   contents: read
