@@ -132,6 +132,45 @@ clone_repository() {
 mkdir -p "$(dirname "$THIRD_PARTY_SOURCES_FILE")"
 printf 'Repository\tBranch\tCommit\n' > "$THIRD_PARTY_SOURCES_FILE"
 
+# LibWrt qualcommax target 的 DEFAULT_PACKAGES 会强制带入完整 WiFi 栈与
+# NSS WiFi 卸载模块，仅在 .config 写 =n 无法剔除，需在源码 Makefile 层面移除。
+# 本固件为有线-only M2：只移除 WiFi 相关包，保留全部有线 NSS 客户端（满血 NSS）。
+prune_qualcommax_defaults() {
+	local qualcommax_makefile="target/linux/qualcommax/Makefile"
+	local ipq60xx_target_mk="target/linux/qualcommax/ipq60xx/target.mk"
+	local ipq60xx_image_mk="target/linux/qualcommax/image/ipq60xx.mk"
+
+	python3 - "$qualcommax_makefile" "$ipq60xx_target_mk" "$ipq60xx_image_mk" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+qualcommax, ipq60xx_target, ipq60xx_image = map(Path, sys.argv[1:])
+for path in (qualcommax, ipq60xx_target, ipq60xx_image):
+    if not path.is_file():
+        raise SystemExit(f"Error: expected target file not found: {path}")
+
+remove_defaults = {
+    "kmod-qca-nss-drv-wifi-meshmgr",
+}
+lines = qualcommax.read_text(encoding="utf-8").splitlines(keepends=True)
+text = "".join(line for line in lines if line.strip().rstrip("\\").strip() not in remove_defaults)
+for token in ("wpad-openssl", "kmod-ath11k-ahb", "kmod-ath11k-pci", "kmod-ath11k"):
+    text = re.sub(rf"(?<!\S){re.escape(token)}(?!\S)", "", text)
+qualcommax.write_text(text, encoding="utf-8")
+
+target_text = ipq60xx_target.read_text(encoding="utf-8")
+target_text = re.sub(r"(?<!\S)ath11k-firmware-ipq6018(?!\S)", "", target_text)
+ipq60xx_target.write_text(target_text, encoding="utf-8")
+
+image_text = ipq60xx_image.read_text(encoding="utf-8")
+image_text = image_text.replace("DEVICE_PACKAGES := ipq-wifi-zn_m2", "DEVICE_PACKAGES :=")
+ipq60xx_image.write_text(image_text, encoding="utf-8")
+PY
+}
+
+prune_qualcommax_defaults
+
 # 修改默认IP & 固件名称 & 编译署名和时间
 sed -i 's/192.168.1.1/192.168.3.1/g' package/base-files/files/bin/config_generate
 sed -i "s/hostname='.*'/hostname='Roc'/g" package/base-files/files/bin/config_generate
@@ -151,8 +190,10 @@ sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.r
                 }, [ 'Built by Roc $(date "+%Y-%m-%d %H:%M:%S")' ])\n \
             ]),#" "$luci_system_js"
 
-# 调整NSS驱动q6_region内存区域预留大小（ipq6018.dtsi默认预留85MB，ipq6018-512m.dtsi默认预留55MB，带WiFi必须至少预留54MB，以下分别是改成预留16MB、32MB、64MB和96MB）
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x01000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
+# 调整NSS驱动q6_region内存区域预留大小（ipq6018-512m.dtsi 默认 55MB = 0x3700000；带 WiFi 至少需 54MB）
+# 本固件完全不带 WiFi，按需求缩减为 16MB = 0x01000000，释放约 39MB 内存给系统
+sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x01000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
+grep -Fq '0x0 0x01000000' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi || { echo "Error: q6_region 16MB patch failed" >&2; exit 1; }
 # sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x02000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
 # sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x04000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
 # sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x06000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
@@ -247,14 +288,15 @@ if [ "${#frp_luci_paths[@]}" -gt 0 ]; then
   done
 fi
 
+# 与 feeds.conf.default 中的 openwrt-25.12 分支保持一致，避免 master 与 25.12 混用
 if package_enabled luci-app-upnp miniupnpd; then
   rm -rf feeds/packages/net/miniupnpd
-  git_sparse_clone master https://github.com/immortalwrt/packages net/miniupnpd
+  git_sparse_clone openwrt-25.12 https://github.com/immortalwrt/packages net/miniupnpd
   mv package/miniupnpd feeds/packages/net/miniupnpd
 fi
 if package_enabled luci-app-upnp; then
   rm -rf feeds/luci/applications/luci-app-upnp
-  git_sparse_clone master https://github.com/immortalwrt/luci applications/luci-app-upnp
+  git_sparse_clone openwrt-25.12 https://github.com/immortalwrt/luci applications/luci-app-upnp
   mv package/luci-app-upnp feeds/luci/applications/luci-app-upnp
 fi
 
@@ -289,6 +331,32 @@ fi
 
 if package_enabled luci-app-lucky lucky; then
   clone_repository https://github.com/gdy666/luci-app-lucky main package/luci-app-lucky
+
+  lucky_makefile="package/luci-app-lucky/lucky/Makefile"
+  [ -f "$lucky_makefile" ] || { echo "Error: lucky Makefile not found: $lucky_makefile" >&2; exit 1; }
+
+  # 构建时动态解析官方最新 Release，不写死版本号；资产切换为 wanji（万吉）版
+  lucky_tag="$(curl -fsSL --retry 3 --max-time 30 https://api.github.com/repos/gdy666/lucky/releases/latest | jq -r '.tag_name' 2>/dev/null || true)"
+  if [ -z "$lucky_tag" ] || [ "$lucky_tag" = "null" ]; then
+    lucky_tag="$(git ls-remote --tags --refs https://github.com/gdy666/lucky.git 'v*' | awk -F/ '{print $NF}' | sort -V | tail -n 1 || true)"
+  fi
+  case "$lucky_tag" in
+    v[0-9]*) ;;
+    *) echo "Error: unable to determine latest lucky release tag" >&2; exit 1 ;;
+  esac
+  lucky_version="${lucky_tag#v}"
+
+  sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${lucky_version}/" "$lucky_makefile"
+  # shellcheck disable=SC2016  # Make 变量需保持字面量
+  sed -i 's#^PKG_SOURCE:=lucky_.*\.tar\.gz$#PKG_SOURCE:=lucky_$(PKG_VERSION)_Linux_$(LUCKY_ARCH)_wanji.tar.gz#' "$lucky_makefile"
+  grep -Fq 'PKG_SOURCE_URL:=https://github.com/gdy666/lucky/releases/download/v$(PKG_VERSION)' "$lucky_makefile" || {
+    echo "Error: unexpected lucky PKG_SOURCE_URL in $lucky_makefile" >&2; exit 1; }
+  # shellcheck disable=SC2016
+  grep -Fq 'PKG_SOURCE:=lucky_$(PKG_VERSION)_Linux_$(LUCKY_ARCH)_wanji.tar.gz' "$lucky_makefile" || {
+    echo "Error: failed to switch lucky to the wanji asset" >&2; exit 1; }
+
+  printf 'https://github.com/gdy666/lucky/releases/tag/%s\tlatest\tv%s (wanji)\n' "$lucky_tag" "$lucky_version" >> "$THIRD_PARTY_SOURCES_FILE"
+  echo "lucky: $lucky_tag / wanji asset (version resolved at build time)"
 fi
 
 if package_enabled luci-app-wechatpush; then
