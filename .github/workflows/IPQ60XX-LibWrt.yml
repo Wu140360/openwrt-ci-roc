@@ -24,5 +24,12 @@ jobs:
       kernel_file: kernel-6.12
       artifact_prefix: IPQ60XX
       manifest_file: libwrt-qualcommax-ipq60xx.manifest
+      rename_qualcommax_to_nowifi: true
       release_summary: >-
-        这是开启全功能NSS的6.12内核固件，默认主题为Aurora；该固件在ImmortalWrt的基础上，添加了额外的软件包cpufreq、ddns、upnp、wol、samba4、vlmcsd、autoreboot、uhttpd、frps、frpc、diskman、hd-idle、acme、wireguard、watchcat、3cat、passwall，并添加了若干工具，具体详见IPQ60XX.config和General.config。
+        兆能 ZN M2 专用固件（分支 5）：仅编译 zn_m2 机型，完全无 WiFi；满血 NSS，
+        q6_region 预留 16MB，NSS 固件沿用仓库默认推荐值；完整 USB3.0 支持；
+        Aurora 主题 + 简体中文 LuCI；ttyd 终端与常用配置/调试工具；
+        smartdns、OpenClash（官方 master 最新版）、UPnP、WireGuard、AdGuardHome、
+        vlmcsd(KMS)、Lucky 万吉版（自动跟随 gdy666/lucky 最新 Release，不写死版本号）。
+        与 Lucky 万吉内置模块重复的独立插件已移除，PassWall 等计划外插件已关闭。
+        具体详见 configs/IPQ60XX.config、configs/General.config 与 scripts/Roc-script.sh。
