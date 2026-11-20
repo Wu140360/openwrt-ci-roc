@@ -1,0 +1,59 @@
+name: Diag-Build-Log
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: '失败的 workflow run id'
+        required: true
+        default: '44749692129'
+        type: string
+      job_id:
+        description: '失败的 job id'
+        required: true
+        default: '136334045246'
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  Collect:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          persist-credentials: true
+
+      - name: Fetch failed job log
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          curl -fsSL --retry 3 --max-time 600 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/jobs/${JOB_ID}/logs" \
+            -o /tmp/build.log
+          wc -l -c /tmp/build.log
+
+      - name: Extract failure evidence
+        run: |
+          mkdir -p diag
+          grep -inE 'Error [0-9]|error:|ERROR:|make\[[0-9]+\]: \*\*\*|No rule to make|not found|missing|failed|fatal:' /tmp/build.log \
+            | head -n 250 > diag/errors.txt || true
+          tail -n 1000 /tmp/build.log > diag/tail.txt
+          awk '/Load Custom Configuration|Compile Firmware/{f=1} f' /tmp/build.log \
+            | tail -n 1500 > diag/compile_tail.txt
+          wc -l -c diag/*
+
+      - name: Push diagnostics
+        run: |
+          git config user.name "Yuanbao"
+          git config user.email "yuanbao@tencent.com"
+          git add diag/
+          git commit -m "diag: capture compile failure log" || echo "no changes"
+          git push origin HEAD:master
