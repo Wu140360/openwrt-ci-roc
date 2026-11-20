@@ -452,3 +452,28 @@ fi
 
 ./scripts/feeds update -i -a
 ./scripts/feeds install -a
+
+# ===== 修复 OpenClash → ruby → rust/host 编译失败 =====
+# immortalwrt/packages 的 ruby 在 aarch64 默认 RUBY_ENABLE_YJIT=y，
+# PKG_BUILD_DEPENDS 含 RUBY_ENABLE_YJIT:rust/host；rust 1.96.0 host 编译
+# 写死 llvm.download-ci-llvm=true，需从 ci-artifacts.rust-lang.org 下载
+# rust-dev-1.96.0-*.tar.xz（该 CI 产物已 404），导致 world 构建必然失败。
+# OpenClash 仅用 ruby 解释器 + ruby-yaml 解析 YAML，YJIT 非必需：
+# 关闭默认 YJIT 并摘掉 rust/host 构建依赖，ruby 走 --disable-yjit 正常编译。
+ruby_makefile="feeds/packages/lang/ruby/Makefile"
+if [ ! -f "$ruby_makefile" ]; then
+  echo "Error: $ruby_makefile not found; cannot disable ruby YJIT/rust host dependency" >&2
+  exit 1
+fi
+sed -i \
+  -e 's#[[:space:]]*RUBY_ENABLE_YJIT:rust/host##' \
+  -e 's#^[[:space:]]*default y if x86_64||aarch64$#    default n#' \
+  "$ruby_makefile"
+if grep -q 'RUBY_ENABLE_YJIT:rust/host' "$ruby_makefile" \
+   || grep -q 'default y if x86_64' "$ruby_makefile"; then
+  echo "Error: ruby YJIT / rust host 依赖补丁未生效" >&2
+  exit 1
+fi
+grep -q '^[[:space:]]*default n[[:space:]]*$' "$ruby_makefile" \
+  || { echo "Error: ruby YJIT 默认值未改为 n" >&2; exit 1; }
+echo "ruby: YJIT disabled, rust/host build dependency removed"
