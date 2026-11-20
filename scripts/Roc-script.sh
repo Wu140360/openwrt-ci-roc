@@ -151,11 +151,51 @@ sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.r
                 }, [ 'Built by Roc $(date "+%Y-%m-%d %H:%M:%S")' ])\n \
             ]),#" "$luci_system_js"
 
-# 调整NSS驱动q6_region内存区域预留大小（ipq6018.dtsi默认预留85MB，ipq6018-512m.dtsi默认预留55MB，带WiFi必须至少预留54MB，以下分别是改成预留16MB、32MB、64MB和96MB）
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x01000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x02000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x04000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x06000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
+# ===== 本分支定制：兆能 ZN-M2 无 WiFi / 满血 NSS =====
+# 仅在设备配置显式关闭 kmod-ath11k 时生效，避免影响同仓库其它机型的 workflow
+if grep -Fxq 'CONFIG_PACKAGE_kmod-ath11k=n' "${CONFIG_FILES[@]}"; then
+  # 1) q6_region 预留 16MB（ipq6018-512m.dtsi 默认 55MB，带 WiFi 至少需 54MB；无 WiFi 时把内存归还系统）
+  q6_dtsi="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi"
+  [ -f "$q6_dtsi" ] || { echo "Error: $q6_dtsi not found" >&2; exit 1; }
+  sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x01000000>/' "$q6_dtsi"
+  grep -q '0x4ab00000 0x0 0x01000000' "$q6_dtsi" || { echo "Error: q6_region 16MB patch failed" >&2; exit 1; }
+
+  # 2) 彻底禁用 ZN-M2 的 WiFi 硬件节点（原 DTS 显式 status = "okay"）
+  zn_m2_dts="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6000-m2.dts"
+  [ -f "$zn_m2_dts" ] || { echo "Error: $zn_m2_dts not found" >&2; exit 1; }
+  python3 - "$zn_m2_dts" <<'PY'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+s = p.read_text()
+start = s.find("&wifi {")
+if start >= 0:
+    end = s.find("};", start)
+    if end < 0:
+        sys.exit("Error: unterminated &wifi node")
+    s = s[:start] + '&wifi {\n\tstatus = "disabled";\n};' + s[end + 2:]
+    p.write_text(s.rstrip("\n") + "\n")
+PY
+  grep -q 'status = "disabled"' "$zn_m2_dts" || { echo "Error: ZN-M2 wifi node disable failed" >&2; exit 1; }
+
+  # 3) 移除 zn_m2 设备级默认 WiFi 包（沿用源码内 jdcloud_re-cs-07 的无 WiFi 写法）
+  ipq60xx_mk="target/linux/qualcommax/image/ipq60xx.mk"
+  [ -f "$ipq60xx_mk" ] || { echo "Error: $ipq60xx_mk not found" >&2; exit 1; }
+  python3 - "$ipq60xx_mk" <<'PY'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+s = p.read_text()
+old = "\tDEVICE_PACKAGES := ipq-wifi-zn_m2\n"
+new = ("\tDEVICE_PACKAGES := -ipq-wifi-zn_m2 -ath11k-firmware-ipq6018 "
+       "-ath11k-firmware-qcn9074 -kmod-ath11k -kmod-ath11k-ahb "
+       "-kmod-ath11k-pci -hostapd-common -wpad-openssl\n")
+if old not in s:
+    sys.exit("Error: zn_m2 DEVICE_PACKAGES anchor not found")
+p.write_text(s.replace(old, new, 1))
+PY
+  grep -q 'DEVICE_PACKAGES := -ipq-wifi-zn_m2' "$ipq60xx_mk" || { echo "Error: zn_m2 wifi packages exclusion failed" >&2; exit 1; }
+fi
 
 # 调节IPQ60XX的1.5GHz频率电压(从0.9375V提高到0.95V，过低可能导致不稳定，过高可能增加功耗和发热，具体数值需要根据实际情况调整)
 # sed -i 's/opp-microvolt = <937500>;/opp-microvolt = <950000>;/' target/linux/qualcommax/patches-6.12/0038-v6.16-arm64-dts-qcom-ipq6018-add-1.5GHz-CPU-Frequency.patch
@@ -289,6 +329,80 @@ fi
 
 if package_enabled luci-app-lucky lucky; then
   clone_repository https://github.com/gdy666/luci-app-lucky main package/luci-app-lucky
+
+  # ===== Lucky「小满」版：从官方文件服务动态取最新版，不写死版本号 =====
+  # 版本可由 workflow 输入 lucky_version 指定；默认 auto 自动发现。
+  # 官方目录/文件命名：v<VER>/<VER>_xiaoman/lucky_<VER>_Linux_arm64_xiaoman.tar.gz
+  LUCKY_RELEASE_BASE="${LUCKY_RELEASE_BASE:-https://release.66666.host}"
+  LUCKY_RELEASE_MIRROR="${LUCKY_RELEASE_MIRROR:-https://lucky666.cn/release}"
+  LUCKY_REQUESTED_VERSION="${LUCKY_VERSION:-auto}"
+
+  lucky_url_for() {
+    local base="$1" ver="$2"
+    printf '%s/v%s/%s_xiaoman/lucky_%s_Linux_arm64_xiaoman.tar.gz' \
+      "$base" "$ver" "$ver" "$ver"
+  }
+
+  collect_lucky_versions() {
+    local base page
+    {
+      for base in "$LUCKY_RELEASE_BASE" "$LUCKY_RELEASE_MIRROR"; do
+        for page in "$base/install.sh" "$base/"; do
+          curl -fsSL --max-time 30 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" "$page" 2>/dev/null || true
+        done
+      done
+    } | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' \
+      | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -Vr | uniq || true
+  }
+
+  if [ "$LUCKY_REQUESTED_VERSION" != "auto" ]; then
+    lucky_candidates="${LUCKY_REQUESTED_VERSION#v}"
+  else
+    lucky_candidates="$(collect_lucky_versions | head -n 12 || true)"
+  fi
+
+  mkdir -p dl
+  LUCKY_VER=""
+  LUCKY_TARBALL=""
+  LUCKY_SELECTED_BASE=""
+  for candidate in $lucky_candidates; do
+    [ -n "$candidate" ] || continue
+    tarball="lucky_${candidate}_Linux_arm64_xiaoman.tar.gz"
+    for base in "$LUCKY_RELEASE_BASE" "$LUCKY_RELEASE_MIRROR"; do
+      rm -f "dl/$tarball" dl/.lucky-list
+      if curl -fsSL --retry 2 --max-time 300 -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+           "$(lucky_url_for "$base" "$candidate")" -o "dl/$tarball" \
+           && [ -s "dl/$tarball" ]; then
+        if tar -tzf "dl/$tarball" > dl/.lucky-list 2>/dev/null \
+             && grep -Eq '(^|/)lucky$' dl/.lucky-list; then
+          LUCKY_VER="$candidate"
+          LUCKY_TARBALL="$tarball"
+          LUCKY_SELECTED_BASE="$base"
+          break 2
+        fi
+      fi
+    done
+  done
+  rm -f dl/.lucky-list
+
+  if [ -z "$LUCKY_VER" ]; then
+    echo "Error: 无法从 ${LUCKY_RELEASE_BASE} 获取 Lucky 小满 (Linux arm64)；请在工作流中显式指定 lucky_version。" >&2
+    exit 1
+  fi
+  echo "Lucky 小满版: ${LUCKY_VER} <- ${LUCKY_SELECTED_BASE}/${LUCKY_TARBALL}"
+
+  # 改写 lucky 核心包的下载源与版本；PKG_HASH 原本即为 skip，tar 内二进制名仍为 lucky
+  lucky_makefile="package/luci-app-lucky/lucky/Makefile"
+  [ -f "$lucky_makefile" ] || { echo "Error: $lucky_makefile not found" >&2; exit 1; }
+  sed -i \
+    -e "s|^PKG_VERSION:=.*|PKG_VERSION:=${LUCKY_VER}|" \
+    -e 's|^PKG_SOURCE:=.*|PKG_SOURCE:=lucky_$(PKG_VERSION)_Linux_$(LUCKY_ARCH)_xiaoman.tar.gz|' \
+    -e "s|^PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=${LUCKY_SELECTED_BASE}/v\$(PKG_VERSION)/\$(PKG_VERSION)_xiaoman|" \
+    "$lucky_makefile"
+  grep -q "^PKG_VERSION:=${LUCKY_VER}$" "$lucky_makefile" \
+    || { echo "Error: lucky Makefile 版本改写失败" >&2; exit 1; }
+  printf 'Lucky-XiaoMan\t%s\t%s\n' "$LUCKY_VER" \
+    "$(lucky_url_for "$LUCKY_SELECTED_BASE" "$LUCKY_VER")" >> "$THIRD_PARTY_SOURCES_FILE"
 fi
 
 if package_enabled luci-app-wechatpush; then

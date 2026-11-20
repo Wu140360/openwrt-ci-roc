@@ -43,6 +43,10 @@ on:
         required: false
         type: string
         default: apk
+      lucky_version:
+        required: false
+        type: string
+        default: auto
 
 permissions:
   contents: read
@@ -243,6 +247,7 @@ jobs:
     - name: Load Custom Configuration(加载自定义配置)
       env:
         CONFIG_FILE: ${{ inputs.config_file }}
+        LUCKY_VERSION: ${{ inputs.lucky_version }}
       run: |
         chmod +x "$GITHUB_WORKSPACE/$DIY_SCRIPT"
         cd "$OPENWRT_PATH"
