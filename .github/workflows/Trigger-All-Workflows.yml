@@ -69,11 +69,6 @@ jobs:
               echo ""
               echo '```'
             } >> "$SUM"
-            # 同时落盘并回传为 annotation / 仓库文件
-            mkdir -p debug
-            cp "$SUM" debug/build-failure.log
-            tail -c 14000 debug/build-failure.log | tr '\n' ' ' | tr -d '\r' > /tmp/notice.txt
-            echo "::notice title=BUILD_FAILURE::$(cat /tmp/notice.txt)" || true
             if [ "$code" != "200" ]; then
               echo "Download failed; see body above." >> "$SUM"
               exit 0
@@ -126,6 +121,11 @@ jobs:
               done < /tmp/logfiles
               echo '```'
             } >> "$SUM"
+            # 同时落盘并回传为 annotation / 仓库文件
+            mkdir -p debug
+            cp "$SUM" debug/build-failure.log
+            tail -c 14000 debug/build-failure.log | tr '\n' ' ' | tr -d '\r' > /tmp/notice.txt
+            echo "::notice title=BUILD_FAILURE::$(cat /tmp/notice.txt)" || true
         - name: Push diagnostic file
           if: always()
           env:
