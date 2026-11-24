@@ -151,11 +151,44 @@ sed -i "s#_('Firmware Version'), (L\.isObject(boardinfo\.release) ? boardinfo\.r
                 }, [ 'Built by Roc $(date "+%Y-%m-%d %H:%M:%S")' ])\n \
             ]),#" "$luci_system_js"
 
-# 调整NSS驱动q6_region内存区域预留大小（ipq6018.dtsi默认预留85MB，ipq6018-512m.dtsi默认预留55MB，带WiFi必须至少预留54MB，以下分别是改成预留16MB、32MB、64MB和96MB）
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x01000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x02000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x04000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
-# sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x06000000>/' target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi
+# 调整NSS驱动q6_region内存区域预留大小（ipq6018.dtsi默认85MB，ipq6018-512m.dtsi默认55MB；
+# 带WiFi必须至少54MB，本固件完全无WiFi，故改为16MB=0x01000000，把内存还给系统）
+q6_dtsi="target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq6018-512m.dtsi"
+[ -f "$q6_dtsi" ] || { echo "Error: $q6_dtsi not found" >&2; exit 1; }
+sed -i 's/reg = <0x0 0x4ab00000 0x0 0x[0-9a-f]\+>/reg = <0x0 0x4ab00000 0x0 0x01000000>/' "$q6_dtsi"
+grep -Fq '0x0 0x01000000' "$q6_dtsi" || { echo "Error: q6_region 16MB patch failed" >&2; exit 1; }
+# 兆能 M2 的 ipq6000-m2.dts -> ipq6000-cmiot.dtsi -> ipq6018-512m.dtsi，上面改的正是它引用的文件。
+
+### 完全剔除 WiFi：从源码层面移除默认包与 M2 的 board 数据依赖 ###
+# .config 里已用 =n 覆盖，这里再从 DEFAULT_PACKAGES / DEVICE_PACKAGES 摘干净，三重保险。
+python3 - "$PWD/target/linux/qualcommax/Makefile" "$PWD/target/linux/qualcommax/image/ipq60xx.mk" <<'PYEOF'
+import re, sys
+qax_mk, img_mk = sys.argv[1], sys.argv[2]
+s = open(qax_mk, encoding='utf-8').read()
+drop = {'wpad-openssl', 'kmod-ath11k', 'kmod-ath11k-ahb', 'kmod-ath11k-pci',
+        'kmod-qca-nss-drv-wifi-meshmgr'}
+start = s.index('DEFAULT_PACKAGES +=')
+end = s.index('\n\n', start)
+pkgs = [t for t in s[start:end].replace('\\', ' ').split()[2:] if t not in drop]
+lines = []
+for i in range(0, len(pkgs), 8):
+    lines.append('\t' + ' '.join(pkgs[i:i+8]) + (' \\' if i + 8 < len(pkgs) else ''))
+new_block = 'DEFAULT_PACKAGES += \\\n' + '\n'.join(lines)
+s = s[:start] + new_block + s[end:]
+open(qax_mk, 'w', encoding='utf-8').write(s)
+
+t = open(img_mk, encoding='utf-8').read()
+block = re.search(r'(define Device/zn_m2\n)(.*?)(\nendef)', t, re.S)
+if not block:
+    sys.exit('Error: Device/zn_m2 block not found in ipq60xx.mk')
+body = '\n'.join(ln for ln in block.group(2).split('\n') if 'ipq-wifi-zn_m2' not in ln)
+t = t[:block.start(2)] + body + t[block.end(2):]
+open(img_mk, 'w', encoding='utf-8').write(t)
+PYEOF
+if grep -q 'kmod-qca-nss-drv-wifi-meshmgr' target/linux/qualcommax/Makefile; then
+  echo "Error: WiFi NSS module still in DEFAULT_PACKAGES" >&2
+  exit 1
+fi
 
 # 调节IPQ60XX的1.5GHz频率电压(从0.9375V提高到0.95V，过低可能导致不稳定，过高可能增加功耗和发热，具体数值需要根据实际情况调整)
 # sed -i 's/opp-microvolt = <937500>;/opp-microvolt = <950000>;/' target/linux/qualcommax/patches-6.12/0038-v6.16-arm64-dts-qcom-ipq6018-add-1.5GHz-CPU-Frequency.patch
@@ -190,10 +223,9 @@ git_sparse_clone() {
   rm -rf "$repodir"
 }
 
-# Aria2 & nginx & Go & DDNS & frp & UPnP & Wol
-rm -rf feeds/packages/lang/golang
-git_sparse_clone master https://github.com/laipeng668/packages lang/golang
-mv package/golang feeds/packages/lang/golang
+# Aria2 & nginx & DDNS & frp & UPnP & Wol
+# 本分支不编译任何 Go 软件包（frp / openlist2 / passwall / aria2 均已关闭），
+# 因此不再替换 feeds 自带的 golang，避免计划外的源码变更与额外下载。
 
 if package_enabled luci-app-aria2 aria2; then
   rm -rf feeds/packages/net/aria2
@@ -291,6 +323,86 @@ if package_enabled luci-app-lucky lucky; then
   clone_repository https://github.com/gdy666/luci-app-lucky main package/luci-app-lucky
 fi
 
+### Lucky「小满」：动态获取最新版，且只集成一个二进制、一个 LuCI 页面 ###
+# 仓库自带 lucky/Makefile 拉的是标准/万吉版，这里改为发布站的 xiaoman 构建。
+# 版本号完全动态解析（不写死 3.8.1），便于以后直接重跑 workflow 编新固件。
+if package_enabled luci-app-lucky lucky; then
+  lucky_mk="package/luci-app-lucky/lucky/Makefile"
+  [ -f "$lucky_mk" ] || { echo "Error: $lucky_mk not found" >&2; exit 1; }
+
+  browser_ua='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+  fetch_index() {
+    curl -fsSL --max-time 40 --retry 2 \
+      -A "$browser_ua" \
+      -H 'Accept: text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8' \
+      -H 'Accept-Language: zh-CN,zh;q=0.9,en;q=0.8' \
+      -H 'Sec-Fetch-Dest: document' -H 'Sec-Fetch-Mode: navigate' \
+      -H 'Upgrade-Insecure-Requests: 1' \
+      "$1" 2>/dev/null || true
+  }
+
+  LUCKY_VER="${LUCKY_XIAOMAN_VERSION:-}"
+  if [ -n "$LUCKY_VER" ]; then
+    echo "Lucky xiaoman version pinned by env: $LUCKY_VER"
+  else
+    # 主：官方发布站根目录；备：官方备用域名；再备：Docker Hub 的 _xiaoman 标签
+    for base in "https://release.66666.host/" "https://lucky666.cn/release/"; do
+      cand="$(printf '%s\n' "$(fetch_index "$base")" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^v//' | sort -Vu | tail -n 1 || true)"
+      if [ -n "$cand" ]; then
+        LUCKY_VER="$cand"
+        echo "Lucky latest version from $base : $LUCKY_VER"
+        break
+      fi
+    done
+    if [ -z "$LUCKY_VER" ]; then
+      dh="$(curl -fsSL --max-time 40 --retry 2 'https://hub.docker.com/v2/repositories/gdy666/lucky/tags?page_size=100&name=xiaoman' 2>/dev/null || true)"
+      cand="$(printf '%s\n' "$dh" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+_xiaoman' | sed -E 's/^v//; s/_xiaoman$//' | sort -Vu | tail -n 1 || true)"
+      if [ -n "$cand" ]; then
+        LUCKY_VER="$cand"
+        echo "Lucky latest version from Docker Hub tags: $LUCKY_VER"
+      fi
+    fi
+  fi
+  if [ -z "$LUCKY_VER" ]; then
+    echo "Error: cannot resolve latest Lucky xiaoman version from release.66666.host / lucky666.cn / Docker Hub." >&2
+    echo "Hint: set LUCKY_XIAOMAN_VERSION in workflow env to an explicit version and re-run." >&2
+    exit 1
+  fi
+  case "$LUCKY_VER" in *[!0-9.]* ) echo "Error: invalid Lucky version '$LUCKY_VER'" >&2; exit 1 ;; esac
+
+  # 改写包定义：PKG_VERSION 动态、源码文件名带 _xiaoman、源指向发布站对应版本目录
+  sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=${LUCKY_VER}/" "$lucky_mk"
+  sed -i 's|^PKG_SOURCE:=.*|PKG_SOURCE:=lucky_$(PKG_VERSION)_Linux_$(LUCKY_ARCH)_xiaoman.tar.gz|' "$lucky_mk"
+  sed -i 's|^PKG_SOURCE_URL:=.*|PKG_SOURCE_URL:=https://release.66666.host/v$(PKG_VERSION)/$(PKG_VERSION)_xiaoman|' "$lucky_mk"
+  grep -Fq '_xiaoman.tar.gz' "$lucky_mk" || { echo "Error: failed to switch lucky to xiaoman build" >&2; exit 1; }
+  grep -Fq 'PKG_HASH:=skip' "$lucky_mk" || { echo "Error: lucky PKG_HASH changed, review download flow" >&2; exit 1; }
+
+  # 预下载到 dl/：make download 阶段直接复用（PKG_HASH:=skip），避免二次被 WAF 拦截。
+  # 若解析/下载失败则立即终止，绝不回退成标准版或猜测版本。
+  dl_dir="${OPENWRT_PATH:-$PWD}/dl"
+  mkdir -p "$dl_dir"
+  asset="lucky_${LUCKY_VER}_Linux_arm64_xiaoman.tar.gz"
+  asset_path="$dl_dir/$asset"
+  if [ ! -s "$asset_path" ]; then
+    ok=0
+    for base in "https://release.66666.host/v${LUCKY_VER}/${LUCKY_VER}_xiaoman" \
+                "https://lucky666.cn/release/v${LUCKY_VER}/${LUCKY_VER}_xiaoman"; do
+      if curl -fL --max-time 180 --retry 2 -A "$browser_ua" \
+           -H 'Accept: */*' -H 'Accept-Language: zh-CN,zh;q=0.9' \
+           -H "Referer: ${base}/" \
+           -o "$asset_path" "${base}/${asset}"; then
+        if gzip -t "$asset_path" 2>/dev/null; then ok=1; break; fi
+      fi
+      rm -f "$asset_path"
+    done
+    [ "$ok" = 1 ] || { echo "Error: failed to download ${asset} (Lucky xiaoman ${LUCKY_VER})" >&2; exit 1; }
+  fi
+  gzip -t "$asset_path" || { echo "Error: ${asset} is not a valid gzip archive" >&2; exit 1; }
+  tar -tzf "$asset_path" | grep -q 'lucky' || { echo "Error: ${asset} does not contain lucky binary" >&2; exit 1; }
+  printf '# Lucky-xiaoman\t%s\t%s\n' "$LUCKY_VER" "$asset" >> "$THIRD_PARTY_SOURCES_FILE"
+  echo "Lucky xiaoman ${LUCKY_VER} (arm64) ready: $asset_path"
+fi
+
 if package_enabled luci-app-wechatpush; then
   rm -rf feeds/luci/applications/luci-app-wechatpush
   clone_repository https://github.com/tty228/luci-app-wechatpush master package/luci-app-wechatpush
@@ -329,8 +441,11 @@ if package_enabled luci-app-passwall2; then
 fi
 
 if package_enabled luci-app-openclash; then
-  rm -rf feeds/luci/applications/luci-app-openclash
-  clone_repository https://github.com/vernesong/OpenClash master package/luci-app-openclash
+  # 官方仓库 master 最新提交；用稀疏克隆只取 luci-app-openclash 包目录，
+  # 避免把整个仓库塞进 package/ 造成包路径多一层或带入计划外文件。
+  rm -rf feeds/luci/applications/luci-app-openclash package/luci-app-openclash
+  git_sparse_clone master https://github.com/vernesong/OpenClash luci-app-openclash
+  [ -f package/luci-app-openclash/Makefile ] || { echo "Error: OpenClash package Makefile missing" >&2; exit 1; }
 fi
 
 # 清理 PassWall 的 chnlist 规则文件

@@ -55,3 +55,20 @@
 ## 页面预览
 ![Homepage](Homepage.png)
 </div>
+
+
+---
+
+## 本分支：兆能 ZN-M2 无 WiFi 定制（`zn-m2-nowifi-nss`）
+
+- **默认管理地址：`192.168.3.1`**（来自 `scripts/Roc-script.sh` 对 `config_generate` 的替换），默认用户 `root`、密码 `none`。上游 README 里的 `192.168.2.1` 是遗留文案，本分支已一并修正 Release 说明。
+- 源码：`laipeng668/LibWrt` 分支 `25.12-nss`（6.12 内核），入口 workflow 为 `IPQ60XX-LibWrt.yml`，配置文件 `configs/ZN-M2.config` + `configs/General.config`。
+- **机型**：只保留 `zn_m2`，其余 IPQ60XX / IPQ807X / JDCloud / x86-64 固件 workflow 与配置已在本分支移除。
+- **WiFi**：完全剔除 `kmod-ath11k*`、`ath11k-firmware-*`、`ipq-wifi-zn_m2`、`wpad-openssl`、`kmod-qca-nss-drv-wifi-meshmgr`；源码层面同时从 `DEFAULT_PACKAGES` 与 `Device/zn_m2` 的 `DEVICE_PACKAGES` 摘除。
+- **NSS**：保留 LibWrt 全部有线 NSS 卸载模块，`q6_region` 由 55MB 改为 **16MB**（`0x01000000`），NSS 固件 11.4；关闭与 NSS 冲突的 `sqm-scripts-nss`。
+- **Lucky**：只集成 **小满** 一个二进制 + 一个 LuCI 页面。版本号在编译时从 `https://release.66666.host/` 动态解析（不写死）；若发布站被 WAF 拦截导致解析失败，可在 workflow 的 `env` 里设置 `LUCKY_XIAOMAN_VERSION`（例如 `3.8.1`）后重跑。构建会校验压缩包为合法 gzip 且含 `lucky` 可执行文件，失败即终止，绝不回退成标准版。
+- **OpenClash**：从 `vernesong/OpenClash` 官方仓库 `master` 稀疏克隆 `luci-app-openclash`，随每次编译取最新提交；Clash 内核按官方惯例在设备上首次启动时下载，不写入固件以控制体积。
+- **中文**：`CONFIG_LUCI_LANG_zh_Hans=y` 且关闭 `zh_Hant`，LuCI 会自动为所有带 `po/zh_Hans` 的应用选中 `luci-i18n-*-zh-cn`。
+- **刷机提示**：本分支按 **96MB 大分区 uboot** 场景制作；请使用编译产物中的 `nand-factory.ubi` 通过 uboot 刷入，刷机前自行确认分区表与 CDT 已匹配 512M 内存。
+
+> 免责声明沿用仓库原文：本固件禁止用于任何商业用途，请严格遵守国家互联网使用相关法律规定；使用本固件造成的任何理论或实际损失，作者不承担责任。
