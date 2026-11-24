@@ -8,6 +8,16 @@ on:
         required: false
         type: boolean
         default: true
+      diagnose_logs:
+        description: 仅收集失败编译日志（不跑编译）
+        required: false
+        type: boolean
+        default: false
+      job_id:
+        description: 失败 job id
+        required: false
+        type: string
+        default: '138648624919'
   # schedule:
   #   - cron: "0 18 * * 5"
 
@@ -26,3 +36,73 @@ jobs:
       permissions:
         contents: write
         actions: write
+
+    Collect-Logs:
+      if: ${{ inputs.diagnose_logs }}
+      runs-on: ubuntu-24.04
+      permissions:
+        contents: write
+        actions: read
+      steps:
+        - uses: actions/checkout@v4
+          with:
+            persist-credentials: true
+        - name: Download job logs
+          env:
+            GH_TOKEN: ${{ github.token }}
+            JOB_ID: ${{ inputs.job_id }}
+          run: |
+            set -Eeuo pipefail
+            curl -fsSL --max-time 240 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/jobs/${JOB_ID}/logs" \
+              -o /tmp/job-logs.zip
+            mkdir -p /tmp/joblogs
+            unzip -o -q /tmp/job-logs.zip -d /tmp/joblogs
+            find /tmp/joblogs -type f -printf '%p %s\n' | sort
+        - name: Extract failure
+          run: |
+            set -Eeuo pipefail
+            mkdir -p debug
+            OUT=debug/build-failure.log
+            : > "$OUT"
+            find /tmp/joblogs -type f -name '*.txt' | sort > /tmp/logfiles
+            echo "=== LOG FILES ===" >> "$OUT"
+            cat /tmp/logfiles >> "$OUT"
+            echo >> "$OUT"
+            echo "=== ERROR LINES (max 800) ===" >> "$OUT"
+            while IFS= read -r f; do
+              grep -nEi 'error:|\bERROR\b|\bfailed\b|make\[[0-9]+\]: \*\*\*|No rule to make target|is missing dependencies|unsatisfied|Cannot find|not found|fatal:|collect2:|undefined reference|Permission denied|No such file' "$f" || true
+            done < /tmp/logfiles | head -n 800 >> "$OUT"
+            echo >> "$OUT"
+            echo "=== COMPILE STEP TAIL ===" >> "$OUT"
+            compile_file="$(grep -i 'Compile Firmware' /tmp/logfiles | head -n 1 || true)"
+            if [ -n "$compile_file" ]; then
+              echo "source: $compile_file" >> "$OUT"
+              tail -n 500 "$compile_file" >> "$OUT"
+            else
+              echo "source: combined (no per-step file)" >> "$OUT"
+              while IFS= read -r f; do
+                awk '/Compile Firmware/{flag=1} flag{print}' "$f"
+              done < /tmp/logfiles | tail -n 600 >> "$OUT"
+            fi
+            echo >> "$OUT"
+            echo "=== LAST 40 LINES PER FILE ===" >> "$OUT"
+            while IFS= read -r f; do
+              echo "--- $f"
+              tail -n 40 "$f"
+            done < /tmp/logfiles >> "$OUT"
+            wc -l "$OUT"
+            echo "--- preview ---"
+            head -n 30 "$OUT"
+        - name: Push log
+          env:
+            GH_TOKEN: ${{ github.token }}
+          run: |
+            set -Eeuo pipefail
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add debug/build-failure.log
+            git commit -m "chore: capture failed build log for diagnosis" || { echo "no changes"; exit 0; }
+            git push origin "HEAD:${{ github.ref_name }}"
