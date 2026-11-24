@@ -41,7 +41,7 @@ jobs:
       if: ${{ inputs.diagnose_logs }}
       runs-on: ubuntu-24.04
       permissions:
-        contents: write
+        contents: read
         actions: read
       steps:
         - name: Download and extract failure log
@@ -51,91 +51,54 @@ jobs:
           run: |
             set +e
             mkdir -p /tmp/joblogs
-            SUM="$GITHUB_STEP_SUMMARY"
             code=$(curl -sSL --max-time 240 --compressed \
               -o /tmp/job-logs.bin -w '%{http_code}' \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/jobs/${JOB_ID}/logs")
-            {
-              echo '## Diagnose'
-              echo ""
-              echo "HTTP_CODE=$code"
-              echo ""
-              echo '```'
-              file /tmp/job-logs.bin 2>&1
-              ls -l /tmp/job-logs.bin 2>&1
-              head -c 400 /tmp/job-logs.bin 2>/dev/null
-              echo ""
-              echo '```'
-            } >> "$SUM"
+            echo "::notice title=DIAG::HTTP_CODE=$code SIZE=$(stat -c%s /tmp/job-logs.bin 2>/dev/null)"
             if [ "$code" != "200" ]; then
-              echo "Download failed; see body above." >> "$SUM"
+              echo "::notice title=DIAG::download failed: $(head -c 500 /tmp/job-logs.bin | tr '\n' ' ')"
               exit 0
             fi
             unzip -o -q /tmp/job-logs.bin -d /tmp/joblogs
             urc=$?
-            echo "UNZIP_RC=$urc" >> "$SUM"
+            echo "::notice title=DIAG::UNZIP_RC=$urc"
             if [ "$urc" -ne 0 ] && [ "$urc" -ne 1 ]; then
-              # maybe gzip or plain text
               if gzip -t /tmp/job-logs.bin 2>/dev/null; then
-                gzip -dc /tmp/job-logs.bin > /tmp/job-logs.txt
-                mv /tmp/job-logs.txt /tmp/joblogs/job.txt
+                gzip -dc /tmp/job-logs.bin > /tmp/joblogs/job.txt
               else
                 cp /tmp/job-logs.bin /tmp/joblogs/job.txt
               fi
             fi
             find /tmp/joblogs -type f | sort > /tmp/logfiles
+            echo "::notice title=DIAG::FILES=$(tr '\n' ' ' < /tmp/logfiles)"
             {
-              echo ""
-              echo '## Log files'
-              echo '```'
-              find /tmp/joblogs -type f -printf '%p %s\n' | sort
-              echo '```'
-              echo ""
-              echo '## Error lines (max 600)'
-              echo '```'
+              echo '=== KEY ERRORS (last 250) ==='
               while IFS= read -r f; do
-                grep -nEi 'error:|\bERROR\b|\bfailed\b|make\[[0-9]+\]: \*\*\*|No rule to make target|is missing dependencies|unsatisfied|Cannot find|not found|fatal:|collect2:|undefined reference|Permission denied|No such file|missing' "$f" || true
-              done < /tmp/logfiles | head -n 600
-              echo '```'
-              echo ""
-              echo '## Compile step tail'
-              echo '```'
+                grep -nEi 'make\[[0-9]+\]: \*\*\*|error:|\bERROR\b|\bfailed\b|curl: \(22\)|Hash mismatch|No rule to make target|is missing dependencies|unsatisfied|Cannot find|not found|fatal:|collect2:|undefined reference|Permission denied|No such file|missing' "$f" || true
+              done < /tmp/logfiles | tail -n 250
+              echo '=== COMPILE STEP TAIL ==='
               compile_file="$(grep -i 'Compile Firmware' /tmp/logfiles | head -n 1 || true)"
               if [ -n "$compile_file" ]; then
                 echo "source: $compile_file"
-                tail -n 400 "$compile_file"
+                tail -n 180 "$compile_file"
               else
                 while IFS= read -r f; do
                   awk '/Compile Firmware/{flag=1} flag{print}' "$f"
-                done < /tmp/logfiles | tail -n 500
+                done < /tmp/logfiles | tail -n 250
               fi
-              echo '```'
-              echo ""
-              echo '## Last 30 lines per file'
-              echo '```'
+              echo '=== LAST 25 LINES PER FILE ==='
               while IFS= read -r f; do
                 echo "--- $f"
-                tail -n 30 "$f"
+                tail -n 25 "$f"
               done < /tmp/logfiles
-              echo '```'
-            } >> "$SUM"
-            # 同时落盘并回传为 annotation / 仓库文件
-            mkdir -p debug
-            cp "$SUM" debug/build-failure.log
-            tail -c 14000 debug/build-failure.log | tr '\n' ' ' | tr -d '\r' > /tmp/notice.txt
-            echo "::notice title=BUILD_FAILURE::$(cat /tmp/notice.txt)" || true
-        - name: Push diagnostic file
-          if: always()
-          env:
-            GH_TOKEN: ${{ github.token }}
-          run: |
-            set +e
-            if [ ! -f debug/build-failure.log ]; then echo "no file"; exit 0; fi
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add debug/build-failure.log
-            git commit -m "chore: capture failed build log for diagnosis" || { echo "no changes"; exit 0; }
-            git push origin "HEAD:${{ github.ref_name }}"
-            echo "PUSH_RC=$?"
+            } > /tmp/keylog.txt
+            echo "::notice title=DIAG::KEYLOG_BYTES=$(stat -c%s /tmp/keylog.txt)"
+            split -b 3000 -d -a 3 /tmp/keylog.txt /tmp/chunk_
+            i=0
+            for f in /tmp/chunk_*; do
+              i=$((i+1))
+              msg=$(tr '\n' ' ' < "$f" | tr -d '\r' | sed 's/%/%25/g')
+              echo "::notice title=LOG_$i::$msg"
+            done
