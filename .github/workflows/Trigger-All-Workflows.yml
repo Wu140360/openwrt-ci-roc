@@ -56,49 +56,26 @@ jobs:
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/jobs/${JOB_ID}/logs")
-            echo "::notice title=DIAG::HTTP_CODE=$code SIZE=$(stat -c%s /tmp/job-logs.bin 2>/dev/null)"
-            if [ "$code" != "200" ]; then
-              echo "::notice title=DIAG::download failed: $(head -c 500 /tmp/job-logs.bin | tr '\n' ' ')"
-              exit 0
-            fi
+            echo "::notice title=DIAG::HTTP=$code SIZE=$(stat -c%s /tmp/job-logs.bin 2>/dev/null)"
+            if [ "$code" != "200" ]; then exit 0; fi
             unzip -o -q /tmp/job-logs.bin -d /tmp/joblogs
-            urc=$?
-            echo "::notice title=DIAG::UNZIP_RC=$urc"
-            if [ "$urc" -ne 0 ] && [ "$urc" -ne 1 ]; then
-              if gzip -t /tmp/job-logs.bin 2>/dev/null; then
-                gzip -dc /tmp/job-logs.bin > /tmp/joblogs/job.txt
-              else
-                cp /tmp/job-logs.bin /tmp/joblogs/job.txt
-              fi
-            fi
+            if [ "$?" -ne 0 ] && [ "$?" -ne 1 ]; then cp /tmp/job-logs.bin /tmp/joblogs/job.txt; fi
             find /tmp/joblogs -type f | sort > /tmp/logfiles
-            echo "::notice title=DIAG::FILES=$(tr '\n' ' ' < /tmp/logfiles)"
+            LOG=$(head -n 1 /tmp/logfiles)
             {
-              echo '=== KEY ERRORS (last 250) ==='
-              while IFS= read -r f; do
-                grep -nEi 'make\[[0-9]+\]: \*\*\*|error:|\bERROR\b|\bfailed\b|curl: \(22\)|Hash mismatch|No rule to make target|is missing dependencies|unsatisfied|Cannot find|not found|fatal:|collect2:|undefined reference|Permission denied|No such file|missing' "$f" || true
-              done < /tmp/logfiles | tail -n 250
-              echo '=== COMPILE STEP TAIL ==='
-              compile_file="$(grep -i 'Compile Firmware' /tmp/logfiles | head -n 1 || true)"
-              if [ -n "$compile_file" ]; then
-                echo "source: $compile_file"
-                tail -n 180 "$compile_file"
-              else
-                while IFS= read -r f; do
-                  awk '/Compile Firmware/{flag=1} flag{print}' "$f"
-                done < /tmp/logfiles | tail -n 250
-              fi
-              echo '=== LAST 25 LINES PER FILE ==='
-              while IFS= read -r f; do
-                echo "--- $f"
-                tail -n 25 "$f"
-              done < /tmp/logfiles
-            } > /tmp/keylog.txt
-            echo "::notice title=DIAG::KEYLOG_BYTES=$(stat -c%s /tmp/keylog.txt)"
-            split -b 3000 -d -a 3 /tmp/keylog.txt /tmp/chunk_
+              echo '=== COMPILE STEP: LAST 120 LINES ==='
+              awk '/Compile Firmware/{f=1} /Check Space Usage/{f=0} f' "$LOG" | tail -n 120 | cut -c1-260
+              echo '=== FILTERED ERROR LINES (last 60) ==='
+              grep -nEi 'make\[[0-9]+\]: \*\*\*|make: \*\*\*|error: |ERROR:|curl: \(22\)|Hash mismatch|No rule to make target|is missing dependencies|unsatisfied|fatal:|collect2:|undefined reference|Download failed|Permission denied|not found' "$LOG" \
+                | grep -vEi 'ccache |gcc |clang |SHELL= flock| -c -o |\.c$' | tail -n 60 | cut -c1-260
+            } > /tmp/brief.txt
+            head -c 35000 /tmp/brief.txt > /tmp/brief_t.txt
+            rm -f /tmp/chunk_*
+            split -b 3900 -d -a 2 /tmp/brief_t.txt /tmp/chunk_
             i=0
             for f in /tmp/chunk_*; do
               i=$((i+1))
+              [ "$i" -gt 9 ] && break
               msg=$(tr '\n' ' ' < "$f" | tr -d '\r' | sed 's/%/%25/g')
               echo "::notice title=LOG_$i::$msg"
             done
