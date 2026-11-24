@@ -41,68 +41,83 @@ jobs:
       if: ${{ inputs.diagnose_logs }}
       runs-on: ubuntu-24.04
       permissions:
-        contents: write
+        contents: read
         actions: read
       steps:
-        - uses: actions/checkout@v4
-          with:
-            persist-credentials: true
-        - name: Download job logs
+        - name: Download and extract failure log
           env:
             GH_TOKEN: ${{ github.token }}
             JOB_ID: ${{ inputs.job_id }}
           run: |
-            set -Eeuo pipefail
-            curl -fsSL --max-time 240 \
+            set +e
+            mkdir -p /tmp/joblogs
+            SUM="$GITHUB_STEP_SUMMARY"
+            code=$(curl -sSL --max-time 240 --compressed \
+              -o /tmp/job-logs.bin -w '%{http_code}' \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/jobs/${JOB_ID}/logs" \
-              -o /tmp/job-logs.zip
-            mkdir -p /tmp/joblogs
-            unzip -o -q /tmp/job-logs.zip -d /tmp/joblogs
-            find /tmp/joblogs -type f -printf '%p %s\n' | sort
-        - name: Extract failure
-          run: |
-            set -Eeuo pipefail
-            mkdir -p debug
-            OUT=debug/build-failure.log
-            : > "$OUT"
-            find /tmp/joblogs -type f -name '*.txt' | sort > /tmp/logfiles
-            echo "=== LOG FILES ===" >> "$OUT"
-            cat /tmp/logfiles >> "$OUT"
-            echo >> "$OUT"
-            echo "=== ERROR LINES (max 800) ===" >> "$OUT"
-            while IFS= read -r f; do
-              grep -nEi 'error:|\bERROR\b|\bfailed\b|make\[[0-9]+\]: \*\*\*|No rule to make target|is missing dependencies|unsatisfied|Cannot find|not found|fatal:|collect2:|undefined reference|Permission denied|No such file' "$f" || true
-            done < /tmp/logfiles | head -n 800 >> "$OUT"
-            echo >> "$OUT"
-            echo "=== COMPILE STEP TAIL ===" >> "$OUT"
-            compile_file="$(grep -i 'Compile Firmware' /tmp/logfiles | head -n 1 || true)"
-            if [ -n "$compile_file" ]; then
-              echo "source: $compile_file" >> "$OUT"
-              tail -n 500 "$compile_file" >> "$OUT"
-            else
-              echo "source: combined (no per-step file)" >> "$OUT"
-              while IFS= read -r f; do
-                awk '/Compile Firmware/{flag=1} flag{print}' "$f"
-              done < /tmp/logfiles | tail -n 600 >> "$OUT"
+              "https://api.github.com/repos/${{ github.repository }}/actions/jobs/${JOB_ID}/logs")
+            {
+              echo '## Diagnose'
+              echo ""
+              echo "HTTP_CODE=$code"
+              echo ""
+              echo '```'
+              file /tmp/job-logs.bin 2>&1
+              ls -l /tmp/job-logs.bin 2>&1
+              head -c 400 /tmp/job-logs.bin 2>/dev/null
+              echo ""
+              echo '```'
+            } >> "$SUM"
+            if [ "$code" != "200" ]; then
+              echo "Download failed; see body above." >> "$SUM"
+              exit 0
             fi
-            echo >> "$OUT"
-            echo "=== LAST 40 LINES PER FILE ===" >> "$OUT"
-            while IFS= read -r f; do
-              echo "--- $f"
-              tail -n 40 "$f"
-            done < /tmp/logfiles >> "$OUT"
-            wc -l "$OUT"
-            echo "--- preview ---"
-            head -n 30 "$OUT"
-        - name: Push log
-          env:
-            GH_TOKEN: ${{ github.token }}
-          run: |
-            set -Eeuo pipefail
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add debug/build-failure.log
-            git commit -m "chore: capture failed build log for diagnosis" || { echo "no changes"; exit 0; }
-            git push origin "HEAD:${{ github.ref_name }}"
+            unzip -o -q /tmp/job-logs.bin -d /tmp/joblogs
+            urc=$?
+            echo "UNZIP_RC=$urc" >> "$SUM"
+            if [ "$urc" -ne 0 ] && [ "$urc" -ne 1 ]; then
+              # maybe gzip or plain text
+              if gzip -t /tmp/job-logs.bin 2>/dev/null; then
+                gzip -dc /tmp/job-logs.bin > /tmp/job-logs.txt
+                mv /tmp/job-logs.txt /tmp/joblogs/job.txt
+              else
+                cp /tmp/job-logs.bin /tmp/joblogs/job.txt
+              fi
+            fi
+            find /tmp/joblogs -type f | sort > /tmp/logfiles
+            {
+              echo ""
+              echo '## Log files'
+              echo '```'
+              find /tmp/joblogs -type f -printf '%p %s\n' | sort
+              echo '```'
+              echo ""
+              echo '## Error lines (max 600)'
+              echo '```'
+              while IFS= read -r f; do
+                grep -nEi 'error:|\bERROR\b|\bfailed\b|make\[[0-9]+\]: \*\*\*|No rule to make target|is missing dependencies|unsatisfied|Cannot find|not found|fatal:|collect2:|undefined reference|Permission denied|No such file|missing' "$f" || true
+              done < /tmp/logfiles | head -n 600
+              echo '```'
+              echo ""
+              echo '## Compile step tail'
+              echo '```'
+              compile_file="$(grep -i 'Compile Firmware' /tmp/logfiles | head -n 1 || true)"
+              if [ -n "$compile_file" ]; then
+                echo "source: $compile_file"
+                tail -n 400 "$compile_file"
+              else
+                while IFS= read -r f; do
+                  awk '/Compile Firmware/{flag=1} flag{print}' "$f"
+                done < /tmp/logfiles | tail -n 500
+              fi
+              echo '```'
+              echo ""
+              echo '## Last 30 lines per file'
+              echo '```'
+              while IFS= read -r f; do
+                echo "--- $f"
+                tail -n 30 "$f"
+              done < /tmp/logfiles
+              echo '```'
+            } >> "$SUM"
