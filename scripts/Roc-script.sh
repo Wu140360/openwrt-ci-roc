@@ -452,4 +452,21 @@ fi
 # echo "baidu.com"  > package/luci-app-passwall/luci-app-passwall/root/usr/share/passwall/rules/chnlist
 
 ./scripts/feeds update -i -a
+
+# 断开 ruby -> rust/host 条件依赖：OpenClash 需要 ruby，而 ruby 在 aarch64 默认开启 YJIT，
+# 其 PKG_BUILD_DEPENDS 含 "RUBY_ENABLE_YJIT:rust/host"，会把 rustc 1.96.0 整套 host 工具链
+# 拉入编译；该包从 Rust CI 下载 LLVM 常返回 404，会直接终止 make world。
+# 这里只摘掉这一条条件依赖，ruby / ruby-yaml / OpenClash 的功能均不受影响。
+ruby_mk="feeds/packages/lang/ruby/Makefile"
+if [ -f "$ruby_mk" ]; then
+  sed -i 's/RUBY_ENABLE_YJIT:rust\/host//' "$ruby_mk"
+  if grep -q '^PKG_BUILD_DEPENDS.*rust/host' "$ruby_mk"; then
+    echo "Error: failed to remove rust/host from $ruby_mk" >&2
+    exit 1
+  fi
+  echo "Removed ruby -> rust/host conditional dependency"
+else
+  echo "Warning: $ruby_mk not found; relying on .config RUBY_ENABLE_YJIT=n" >&2
+fi
+
 ./scripts/feeds install -a
