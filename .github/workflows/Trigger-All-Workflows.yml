@@ -60,7 +60,8 @@ jobs:
               --pattern 'ZN-M2.config.buildinfo' \
               --pattern 'ZN-M2.third-party-sources.txt' \
               --pattern '*sysupgrade.bin' \
-              --pattern '*factory.ubi'
+              --pattern '*factory.ubi' \
+              --pattern 'ZN-M2.Packages.tar.gz'
             ls -l /tmp/assets
             cp /tmp/assets/ZN-M2.manifest /tmp/assets/ZN-M2.config \
                /tmp/assets/ZN-M2.config.buildinfo /tmp/assets/ZN-M2.third-party-sources.txt verify-out/
@@ -109,7 +110,27 @@ jobs:
                 echo '--- lucky binary strings (variant hints) ---'
                 if [ -f /tmp/sqroot/usr/bin/lucky ]; then
                   ls -l /tmp/sqroot/usr/bin/lucky
-                  strings /tmp/sqroot/usr/bin/lucky 2>/dev/null | grep -iE 'xiaoman|小满|wanji|万吉|FileBrowser|CorazaWAF|lucky_' | head -25
+                  strings /tmp/sqroot/usr/bin/lucky 2>/dev/null | grep -iE 'xiaoman|小满|wanji|万吉|FileBrowser|CorazaWAF|lucky_|3\.8\.1' | head -25
+                fi
+                echo '=== extra checks ==='
+                echo '--- sysupgrade tar members ---'
+                tar -tvf "$SYS" 2>&1 | head -20
+                echo '--- factory.ubi q6_region pattern ---'
+                python3 -c "import sys; b=open(sys.argv[1],'rb').read(); p16=bytes.fromhex('000000004ab000000000000001000000'); p55=bytes.fromhex('000000004ab000000000000003700000'); print('16MB:',b.count(p16)); print('55MB:',b.count(p55))" "$UBI"
+                echo '--- /bin/config_generate IP literals ---'
+                ls -l /tmp/sqroot/bin/config_generate 2>&1
+                grep -oE '192\.168\.[0-9]+\.[0-9]+' /tmp/sqroot/bin/config_generate 2>/dev/null | sort | uniq -c
+                echo '--- aurora default theme in uci-defaults ---'
+                grep -rl 'aurora' /tmp/sqroot/etc/uci-defaults 2>/dev/null | head -10
+                echo '--- /etc/config/wireless present? ---'
+                test -e /tmp/sqroot/etc/config/wireless && echo YES || echo NO
+                echo '--- ath11k caldata hotplug script content ---'
+                cat /tmp/sqroot/etc/hotplug.d/firmware/11-ath11k-caldata 2>/dev/null | head -30
+                echo '--- Packages.tar.gz wifi-related apk ---'
+                PKG=$(ls ZN-M2.Packages.tar.gz 2>/dev/null | head -n1)
+                if [ -n "$PKG" ]; then
+                  tar -tzf "$PKG" 2>/dev/null | grep -iE 'ath11k|wpad|ipq-wifi|wifi-mesh|autocore' | head -30
+                  echo "(total entries: $(tar -tzf "$PKG" 2>/dev/null | wc -l))"
                 fi
               fi
             } > "$OUT" 2>&1
