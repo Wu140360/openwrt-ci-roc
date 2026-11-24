@@ -166,7 +166,7 @@ import re, sys
 qax_mk, img_mk = sys.argv[1], sys.argv[2]
 s = open(qax_mk, encoding='utf-8').read()
 drop = {'wpad-openssl', 'kmod-ath11k', 'kmod-ath11k-ahb', 'kmod-ath11k-pci',
-        'kmod-qca-nss-drv-wifi-meshmgr'}
+        'kmod-qca-nss-drv-wifi-meshmgr', 'ath11k-firmware-ipq6018', 'autocore'}
 start = s.index('DEFAULT_PACKAGES +=')
 end = s.index('\n\n', start)
 pkgs = [t for t in s[start:end].replace('\\', ' ').split()[2:] if t not in drop]
