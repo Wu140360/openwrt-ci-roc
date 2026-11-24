@@ -41,7 +41,7 @@ jobs:
       if: ${{ inputs.diagnose_logs }}
       runs-on: ubuntu-24.04
       permissions:
-        contents: read
+        contents: write
         actions: read
       steps:
         - name: Download and extract failure log
@@ -69,6 +69,11 @@ jobs:
               echo ""
               echo '```'
             } >> "$SUM"
+            # 同时落盘并回传为 annotation / 仓库文件
+            mkdir -p debug
+            cp "$SUM" debug/build-failure.log
+            tail -c 14000 debug/build-failure.log | tr '\n' ' ' | tr -d '\r' > /tmp/notice.txt
+            echo "::notice title=BUILD_FAILURE::$(cat /tmp/notice.txt)" || true
             if [ "$code" != "200" ]; then
               echo "Download failed; see body above." >> "$SUM"
               exit 0
@@ -121,3 +126,16 @@ jobs:
               done < /tmp/logfiles
               echo '```'
             } >> "$SUM"
+        - name: Push diagnostic file
+          if: always()
+          env:
+            GH_TOKEN: ${{ github.token }}
+          run: |
+            set +e
+            if [ ! -f debug/build-failure.log ]; then echo "no file"; exit 0; fi
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add debug/build-failure.log
+            git commit -m "chore: capture failed build log for diagnosis" || { echo "no changes"; exit 0; }
+            git push origin "HEAD:${{ github.ref_name }}"
+            echo "PUSH_RC=$?"
