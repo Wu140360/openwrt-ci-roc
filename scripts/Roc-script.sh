@@ -249,9 +249,14 @@ git_sparse_clone() {
   rm -rf "$repodir"
 }
 
-# Aria2 & nginx & DDNS & frp & UPnP & Wol
-# 本分支不编译任何 Go 软件包（frp / openlist2 / passwall / aria2 均已关闭），
-# 因此不再替换 feeds 自带的 golang，避免计划外的源码变更与额外下载。
+# Aria2 & nginx & Go & DDNS & frp & UPnP & Wol
+# 本分支启用 PassWall2，其必需核心 xray-core 的 Makefile 显式
+# include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk，且 PKG_BUILD_DEPENDS:=golang/host；
+# 因此恢复与原仓库一致的做法：用 laipeng668/packages 的 golang 替换 feeds 自带版本，
+# 保证 Go 工具链版本与 PassWall 生态匹配（该仓库含 golang1.27）。
+rm -rf feeds/packages/lang/golang
+git_sparse_clone master https://github.com/laipeng668/packages lang/golang
+mv package/golang feeds/packages/lang/golang
 
 if package_enabled luci-app-aria2 aria2; then
   rm -rf feeds/packages/net/aria2
@@ -464,35 +469,15 @@ fi
 if package_enabled luci-app-passwall2; then
   rm -rf feeds/luci/applications/luci-app-passwall2
   clone_repository https://github.com/Openwrt-Passwall/openwrt-passwall2 main package/luci-app-passwall2
-fi
-
-if package_enabled luci-app-openclash; then
-  # 官方仓库 master 最新提交；用稀疏克隆只取 luci-app-openclash 包目录，
-  # 避免把整个仓库塞进 package/ 造成包路径多一层或带入计划外文件。
-  rm -rf feeds/luci/applications/luci-app-openclash package/luci-app-openclash
-  git_sparse_clone master https://github.com/vernesong/OpenClash luci-app-openclash
-  [ -f package/luci-app-openclash/Makefile ] || { echo "Error: OpenClash package Makefile missing" >&2; exit 1; }
+  # openwrt-passwall-packages 自带一份 smartdns，与本固件已启用的 feeds/net/smartdns 同名；
+  # 同名包定义会被 OpenWrt 包扫描互相覆盖，导致 SmartDNS 版本不可控。这里只摘掉这一份重复定义，
+  # 其余未选中的 PassWall2 可选内核包保留定义（不会装入固件），避免破坏 Kconfig choice 解析。
+  rm -rf package/passwall-packages/smartdns
 fi
 
 # 清理 PassWall 的 chnlist 规则文件
 # echo "baidu.com"  > package/luci-app-passwall/luci-app-passwall/root/usr/share/passwall/rules/chnlist
 
 ./scripts/feeds update -i -a
-
-# 断开 ruby -> rust/host 条件依赖：OpenClash 需要 ruby，而 ruby 在 aarch64 默认开启 YJIT，
-# 其 PKG_BUILD_DEPENDS 含 "RUBY_ENABLE_YJIT:rust/host"，会把 rustc 1.96.0 整套 host 工具链
-# 拉入编译；该包从 Rust CI 下载 LLVM 常返回 404，会直接终止 make world。
-# 这里只摘掉这一条条件依赖，ruby / ruby-yaml / OpenClash 的功能均不受影响。
-ruby_mk="feeds/packages/lang/ruby/Makefile"
-if [ -f "$ruby_mk" ]; then
-  sed -i 's/RUBY_ENABLE_YJIT:rust\/host//' "$ruby_mk"
-  if grep -q '^PKG_BUILD_DEPENDS.*rust/host' "$ruby_mk"; then
-    echo "Error: failed to remove rust/host from $ruby_mk" >&2
-    exit 1
-  fi
-  echo "Removed ruby -> rust/host conditional dependency"
-else
-  echo "Warning: $ruby_mk not found; relying on .config RUBY_ENABLE_YJIT=n" >&2
-fi
 
 ./scripts/feeds install -a
