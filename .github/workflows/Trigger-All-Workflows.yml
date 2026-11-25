@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       zn_m2_libwrt:
-        description: 运行 IPQ60XX-LibWrt（兆能 ZN-M2 无 WiFi 满血 NSS）
+        description: 运行 IPQ60XX-LibWrt-PW2（兆能 ZN-M2 第二款：PassWall2 / 无 OpenClash）
         required: false
         type: boolean
         default: true
