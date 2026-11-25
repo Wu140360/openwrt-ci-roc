@@ -190,6 +190,32 @@ if grep -q 'kmod-qca-nss-drv-wifi-meshmgr' target/linux/qualcommax/Makefile; the
   exit 1
 fi
 
+# 彻底禁用 ath11k-firmware-ipq6018 的包定义：该包被 target metadata 标为默认包，
+# 即使 configs/ZN-M2.config 里写 CONFIG_PACKAGE_ath11k-firmware-ipq6018=n，
+# make defconfig 也会把它降级为 =m，生成一个可选 apk（固件镜像不含，但污染 Packages.tar.gz）。
+# 注释掉它的 BuildPackage 行后，Kconfig 不再认识该包，defconfig 不会生成 =m，也不会构建 apk。
+python3 - <<'PYEOF'
+import sys
+fw_mk = 'package/firmware/ath11k-firmware/Makefile'
+target = '$(eval $(call BuildPackage,ath11k-firmware-ipq6018))'
+lines = open(fw_mk, encoding='utf-8').readlines()
+out, found = [], False
+for ln in lines:
+    if ln.strip() == target:
+        out.append('# ' + ln)
+        found = True
+    else:
+        out.append(ln)
+if found:
+    open(fw_mk, 'w', encoding='utf-8').writelines(out)
+    print('Disabled ath11k-firmware-ipq6018 package definition')
+else:
+    print('Note: ath11k-firmware-ipq6018 BuildPackage line already absent')
+after = open(fw_mk, encoding='utf-8').read()
+if '\n' + target in after:
+    sys.exit('Error: ath11k-firmware-ipq6018 is still enabled')
+PYEOF
+
 # 调节IPQ60XX的1.5GHz频率电压(从0.9375V提高到0.95V，过低可能导致不稳定，过高可能增加功耗和发热，具体数值需要根据实际情况调整)
 # sed -i 's/opp-microvolt = <937500>;/opp-microvolt = <950000>;/' target/linux/qualcommax/patches-6.12/0038-v6.16-arm64-dts-qcom-ipq6018-add-1.5GHz-CPU-Frequency.patch
 
