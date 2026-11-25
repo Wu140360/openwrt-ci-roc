@@ -3,9 +3,6 @@ name: IPQ60XX-LibWrt
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches:
-      - zn-m2-nowifi-nss
   # schedule:
   #   - cron: "0 18 * * *"
 
